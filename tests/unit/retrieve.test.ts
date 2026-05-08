@@ -197,7 +197,7 @@ describe('retrieve', () => {
       graph.addNode('session_mgr', {
         label: 'SessionManager',
         source_file: '/src/session.ts',
-        line_number: 5,
+        source_location: 'L5-L8',
         node_kind: 'class',
         file_type: 'code',
         community: 2,
@@ -2301,7 +2301,35 @@ describe('retrieve', () => {
         missing_required: expect.arrayContaining(['supporting', 'structural']),
       }))
       expect(result.expandable).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'nodes', evidence_class: 'supporting' }),
+        expect.objectContaining({
+          kind: 'nodes',
+          handle_id: expect.stringMatching(/^expand:explain:supporting:/),
+          evidence_class: 'supporting',
+          preview: expect.arrayContaining([
+            expect.objectContaining({
+              node_id: 'session_mgr',
+              label: 'SessionManager',
+              source_file: '/src/session.ts',
+              line_range: {
+                start_line: 5,
+                end_line: 8,
+              },
+            }),
+          ]),
+          follow_up: expect.objectContaining({
+            kind: 'context_pack',
+            task_kind: 'explain',
+            evidence_class: 'supporting',
+            focus_files: expect.arrayContaining(['/src/session-policy.ts', '/src/session-router.ts', '/src/session-validator.ts', '/src/session.ts']),
+            focus_ranges: expect.arrayContaining([
+              {
+                source_file: '/src/session.ts',
+                start_line: 5,
+                end_line: 8,
+              },
+            ]),
+          }),
+        }),
       ]))
     })
 
@@ -2315,6 +2343,35 @@ describe('retrieve', () => {
 
       expect(godNodesSpy).toHaveBeenCalledTimes(1)
       expect(workspaceBridgesSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('omits fallback expandable ranges for malformed line numbers', () => {
+      const graph = new KnowledgeGraph()
+      graph.addNode('auth_service', {
+        label: 'AuthService',
+        file_type: 'code',
+        source_file: '/src/auth.ts',
+        source_location: 'L1',
+        community: 0,
+      })
+      graph.addNode('session_mgr', {
+        label: 'SessionManager',
+        file_type: 'code',
+        source_file: '/src/session.ts',
+        line_number: Infinity,
+        community: 0,
+      })
+      graph.addEdge('auth_service', 'session_mgr', {
+        relation: 'calls',
+        confidence: 'EXTRACTED',
+        source_file: '/src/auth.ts',
+      })
+
+      const result = retrieveContext(graph, { question: 'auth', budget: 1 })
+      const preview = (result.expandable ?? []).flatMap((entry) => entry.preview).find((entry) => entry.node_id === 'session_mgr')
+
+      expect(preview).toBeDefined()
+      expect(preview).not.toHaveProperty('line_range')
     })
 
     it('compacts repeated node metadata for default payloads', () => {

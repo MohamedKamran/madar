@@ -1,13 +1,29 @@
+import type { TaskIntentKind } from './task-intent.js'
+
 export type ContextPackTaskKind = 'explain' | 'review' | 'impact'
 
 export type ContextPackEvidenceClass = 'primary' | 'supporting' | 'structural' | 'change' | 'impact'
 
+export type ContextPackSemanticCategory =
+  | 'implementation'
+  | 'changes'
+  | 'impact'
+  | 'tests'
+  | 'configuration'
+  | 'contracts'
+  | 'structure'
+
 export interface ContextPackTaskContract {
   version: 1
   task_kind: ContextPackTaskKind
+  task_intent?: TaskIntentKind
+  evidence_recipe_id: TaskIntentKind
   budget: number
   prompt?: string
   required_evidence: ContextPackEvidenceClass[]
+  preferred_evidence: ContextPackEvidenceClass[]
+  semantic_required: ContextPackSemanticCategory[]
+  semantic_optional: ContextPackSemanticCategory[]
 }
 
 export interface ContextPackNode {
@@ -53,11 +69,37 @@ export interface ContextPackClaim {
   node_labels: string[]
 }
 
+export interface ContextPackExpandableLineRange {
+  start_line: number
+  end_line: number
+}
+
+export interface ContextPackExpandablePreview {
+  node_id?: string
+  label: string
+  source_file: string
+  line_range?: ContextPackExpandableLineRange
+}
+
+export interface ContextPackExpandableSourceRange extends ContextPackExpandableLineRange {
+  source_file: string
+}
+
+export interface ContextPackExpandableFollowUp {
+  kind: 'context_pack'
+  task_kind: ContextPackTaskKind
+  evidence_class: ContextPackEvidenceClass
+  focus_files: string[]
+  focus_ranges: ContextPackExpandableSourceRange[]
+}
+
 export interface ContextPackExpandableRef {
   kind: 'nodes'
+  handle_id: string
   evidence_class: ContextPackEvidenceClass
   count: number
-  preview_labels: string[]
+  preview: ContextPackExpandablePreview[]
+  follow_up: ContextPackExpandableFollowUp
 }
 
 export type ContextPackCoverageStatus = 'covered' | 'missing' | 'available'
@@ -70,10 +112,23 @@ export interface ContextPackCoverageEntry {
   status: ContextPackCoverageStatus
 }
 
+export interface ContextPackSemanticCoverageEntry {
+  category: ContextPackSemanticCategory
+  label: string
+  required: boolean
+  available_nodes: number
+  selected_nodes: number
+  status: ContextPackCoverageStatus
+}
+
 export interface ContextPackCoverage {
   required_evidence: ContextPackEvidenceClass[]
+  semantic_required: ContextPackSemanticCategory[]
+  semantic_optional: ContextPackSemanticCategory[]
   entries: ContextPackCoverageEntry[]
+  semantic_entries: ContextPackSemanticCoverageEntry[]
   missing_required: ContextPackEvidenceClass[]
+  missing_semantic: ContextPackSemanticCategory[]
   available_relationships: number
   selected_relationships: number
 }

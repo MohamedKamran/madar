@@ -561,6 +561,14 @@ describe('runBenchmark', () => {
       expect(benchmark.avg_reused_context_tokens).toBe(25)
       expect(benchmark.avg_total_tokens).toBe(285)
       expect(benchmark.effective_reduction_ratio).toBe(Number((benchmark.corpus_tokens / 225).toFixed(1)))
+      expect(benchmark.provider_proof).toEqual({
+        input_tokens_basis: 'provider_reported',
+        effective_tokens_basis: 'provider_cache_read_tokens',
+        total_tokens_basis: 'provider_reported',
+        usage_runs: 2,
+        total_runs: 2,
+        providers: ['claude'],
+      })
       expect(benchmark.per_question).toEqual([
         expect.objectContaining({
           question: 'how does authentication work',
@@ -741,9 +749,71 @@ describe('printBenchmark', () => {
     expect(output).toContain('Avg input tokens (Claude reported): ~410')
     expect(output).toContain('Avg effective input tokens (cache-adjusted): ~400')
     expect(output).toContain('Avg total tokens (Claude reported): ~480')
+    expect(output).toContain('Provider/runtime proof: Claude reported input, cache, and total tokens for 1/1 matched questions')
     expect(output).not.toContain('estimate fallback')
     expect(output).not.toContain('graphify token reduction benchmark')
     expect(output).not.toContain('naive corpus')
+    spy.mockRestore()
+  })
+
+  test('does not claim provider cache reporting when structured usage has no cache-read tokens', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    printBenchmark({
+      corpus_tokens: 1000,
+      corpus_words: 750,
+      corpus_source: 'manifest',
+      nodes: 5,
+      edges: 4,
+      structure_signals: null,
+      question_count: 1,
+      matched_question_count: 1,
+      unmatched_questions: [],
+      expected_label_count: 0,
+      matched_expected_label_count: 0,
+      missing_expected_labels: [],
+      avg_query_tokens: 410,
+      avg_effective_query_tokens: 410,
+      avg_reused_context_tokens: 0,
+      avg_total_tokens: 480,
+      reduction_ratio: 2.4,
+      effective_reduction_ratio: 2.4,
+      provider_proof: {
+        input_tokens_basis: 'provider_reported',
+        effective_tokens_basis: 'provider_input_minus_zero_cache',
+        total_tokens_basis: 'provider_reported',
+        usage_runs: 1,
+        total_runs: 1,
+        providers: ['gemini'],
+      },
+      per_question: [
+        {
+          question: 'how does authentication work',
+          query_tokens: 410,
+          effective_query_tokens: 410,
+          reused_context_tokens: 0,
+          total_tokens: 480,
+          reduction: 2.4,
+          expected_labels: [],
+          matched_expected_labels: [],
+          missing_expected_labels: [],
+          prompt_token_source: 'gemini_reported_input',
+          usage: {
+            provider: 'gemini',
+            source: 'structured_stdout',
+            input_tokens: 410,
+            output_tokens: 70,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            input_total_tokens: 410,
+            total_tokens: 480,
+          },
+        },
+      ],
+    } as any)
+    const output = spy.mock.calls.flat().join('\n')
+    expect(output).toContain('Avg input tokens (Gemini reported): ~410')
+    expect(output).toContain('Avg total tokens (Gemini reported): ~480')
+    expect(output).toContain('Provider/runtime proof: Gemini reported input and total tokens; no provider cache-read tokens were reported for 1/1 matched questions')
     spy.mockRestore()
   })
 
@@ -803,6 +873,7 @@ describe('printBenchmark', () => {
     expect(output).toContain('Avg input tokens (Claude reported where available; cl100k_base estimate fallback): ~255')
     expect(output).toContain('Usage capture: Claude reported usage for 1/2 matched questions; remaining runs used local estimate fallback')
     expect(output).not.toContain('Avg total tokens (Claude reported)')
+    expect(output).toContain('Provider/runtime proof: mixed provider-reported usage (1/2 matched questions) with local estimate fallback')
     spy.mockRestore()
   })
 

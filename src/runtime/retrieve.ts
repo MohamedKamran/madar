@@ -6,15 +6,17 @@ import type {
   ContextPackClaim,
   ContextPackCoverage,
   ContextPackEvidenceClass,
+  ContextPackExpandableLineRange,
   ContextPackExpandableRef,
   ContextPackNode,
   ContextPackTaskContract,
 } from '../contracts/context-pack.js'
+import type { TaskIntentKind } from '../contracts/task-intent.js'
 import { KnowledgeGraph } from '../contracts/graph.js'
 import { godNodes, workspaceBridges } from '../pipeline/analyze.js'
 import { type Communities } from '../pipeline/cluster.js'
 import { buildCommunityLabels } from '../pipeline/community-naming.js'
-import { lineNumberFromSourceLocation } from '../shared/source-location.js'
+import { lineNumberFromSourceLocation, lineRangeFromSourceLocation } from '../shared/source-location.js'
 import { relativizeSourceFile } from '../shared/source-path.js'
 import {
   classifyTaskContract,
@@ -49,6 +51,7 @@ const averageLabelLengthCache = new WeakMap<KnowledgeGraph, number>()
 export interface RetrieveOptions {
   question: string
   budget: number
+  taskIntent?: TaskIntentKind
   community?: number
   fileType?: string
   semantic?: boolean
@@ -414,11 +417,15 @@ function scoredNodeFromGraphEntry(
   const resolvedLine = resolvedLineNumber(attributes)
   const nodeKind = String(attributes.node_kind ?? '')
   const frameworkRole = String(attributes.framework_role ?? '')
+  const sourceLocation = typeof attributes.source_location === 'string' && attributes.source_location.length > 0
+    ? attributes.source_location
+    : null
 
   return {
     id,
     label: String(attributes.label ?? ''),
     sourceFile: String(attributes.source_file ?? ''),
+    sourceLocation,
     lineNumber: resolvedLine.lineNumber,
     lineNumberDerived: resolvedLine.derived,
     storedSnippet: storedSnippetFromAttributes(attributes),
@@ -435,6 +442,25 @@ function scoredNodeFromGraphEntry(
     score: 0,
     relevanceBand: 'related',
   }
+}
+
+function expandableLineRange(node: Pick<ScoredNode, 'lineNumber' | 'sourceLocation'>): ContextPackExpandableLineRange | undefined {
+  const sourceRange = lineRangeFromSourceLocation(node.sourceLocation)
+  if (sourceRange) {
+    return {
+      start_line: sourceRange.start,
+      end_line: sourceRange.end,
+    }
+  }
+
+  if (Number.isFinite(node.lineNumber) && Number.isInteger(node.lineNumber) && node.lineNumber > 0) {
+    return {
+      start_line: node.lineNumber,
+      end_line: node.lineNumber,
+    }
+  }
+
+  return undefined
 }
 
 function semanticTextForNode(node: Pick<ScoredNode, 'label' | 'nodeKind' | 'frameworkRole' | 'sourceFile' | 'storedSnippet'>): string {
@@ -474,6 +500,7 @@ interface SeedCandidate {
   id: string
   label: string
   sourceFile: string
+  sourceLocation: string | null
   lineNumber: number
   lineNumberDerived: boolean
   storedSnippet: string | null
@@ -495,6 +522,7 @@ interface ScoredNode {
   id: string
   label: string
   sourceFile: string
+  sourceLocation: string | null
   lineNumber: number
   lineNumberDerived: boolean
   storedSnippet: string | null
@@ -970,8 +998,12 @@ function fallbackRetrieveCoverage(result: RetrieveResult): ContextPackCoverage {
 
   return {
     required_evidence: taskContract.required_evidence,
+    semantic_required: taskContract.semantic_required,
+    semantic_optional: taskContract.semantic_optional,
     entries: [],
+    semantic_entries: [],
     missing_required: [],
+    missing_semantic: [],
     available_relationships: result.relationships.length,
     selected_relationships: result.relationships.length,
   }
@@ -1012,6 +1044,7 @@ function buildRetrieveResultFromOrderedCandidates(
   const taskContract = classifyTaskContract('explain', {
     budget: options.budget,
     prompt: options.question,
+    ...(options.taskIntent ? { task_intent: options.taskIntent } : {}),
   })
   const orderedCandidateIds = new Set(orderedCandidates.map((node) => node.id))
   const orderedCommunities = new Set<number>(orderedCandidates.flatMap((node) => (node.community === null ? [] : [node.community])))
@@ -1060,6 +1093,15 @@ function buildRetrieveResultFromOrderedCandidates(
       node_id: node.id,
       community: node.community,
       evidence_class: evidenceClass,
+      expandable_ref: {
+        node_id: node.id,
+        label: node.label,
+        source_file: relativizeSourceFile(node.sourceFile, rootPath),
+        ...(() => {
+          const lineRange = expandableLineRange(node)
+          return lineRange ? { line_range: lineRange } : {}
+        })(),
+      },
       estimate_tokens: () => {
         if (tokenCost !== undefined) {
           return tokenCost
@@ -1107,7 +1149,11 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
 
   if (questionTokens.length === 0) {
     const emptyPack = compileContextPack({
-      task_contract: classifyTaskContract('explain', { budget, prompt: question }),
+      task_contract: classifyTaskContract('explain', {
+        budget,
+        prompt: question,
+        ...(options.taskIntent ? { task_intent: options.taskIntent } : {}),
+      }),
       nodes: [],
       relationships: [],
       community_context: [],
@@ -1176,6 +1222,9 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
         id,
         label,
         sourceFile,
+        sourceLocation: typeof attributes.source_location === 'string' && attributes.source_location.length > 0
+          ? attributes.source_location
+          : null,
         lineNumber: resolvedLine.lineNumber,
         lineNumberDerived: resolvedLine.derived,
         storedSnippet: storedSnippetFromAttributes(attributes),
@@ -1207,6 +1256,7 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
     id: candidate.id,
     label: candidate.label,
     sourceFile: candidate.sourceFile,
+    sourceLocation: candidate.sourceLocation,
     lineNumber: candidate.lineNumber,
     lineNumberDerived: candidate.lineNumberDerived,
     storedSnippet: candidate.storedSnippet,
@@ -1329,6 +1379,9 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
       id: nodeId,
       label: String(attributes.label ?? ''),
       sourceFile: String(attributes.source_file ?? ''),
+      sourceLocation: typeof attributes.source_location === 'string' && attributes.source_location.length > 0
+        ? attributes.source_location
+        : null,
       lineNumber: resolvedLine.lineNumber,
       lineNumberDerived: resolvedLine.derived,
       storedSnippet: storedSnippetFromAttributes(attributes),

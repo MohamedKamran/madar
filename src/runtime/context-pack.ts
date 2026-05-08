@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import type {
   CompiledContextPack,
   ContextPackClaim,
@@ -5,24 +7,28 @@ import type {
   ContextPackCoverage,
   ContextPackCoverageEntry,
   ContextPackEvidenceClass,
+  ContextPackExpandableFollowUp,
+  ContextPackExpandableLineRange,
+  ContextPackExpandablePreview,
   ContextPackExpandableRef,
+  ContextPackExpandableSourceRange,
   ContextPackGraphSignals,
   ContextPackNode,
   ContextPackRelationship,
+  ContextPackSemanticCategory,
+  ContextPackSemanticCoverageEntry,
   ContextPackTaskContract,
   ContextPackTaskKind,
 } from '../contracts/context-pack.js'
+import type { TaskIntentKind } from '../contracts/task-intent.js'
 import { estimateQueryTokens } from './serve.js'
-
-const REQUIRED_EVIDENCE_BY_TASK: Record<ContextPackTaskKind, ContextPackEvidenceClass[]> = {
-  explain: ['primary', 'supporting', 'structural'],
-  review: ['change', 'supporting', 'impact'],
-  impact: ['primary', 'impact', 'structural'],
-}
+import { resolveTaskEvidenceRecipe } from './task-evidence-recipes.js'
 
 export interface ClassifyTaskContractOptions {
   budget: number
   prompt?: string
+  task_intent?: TaskIntentKind
+  has_change_evidence?: boolean
 }
 
 export interface ContextPackNodeCandidate<TNode extends ContextPackNode = ContextPackNode> {
@@ -30,6 +36,7 @@ export interface ContextPackNodeCandidate<TNode extends ContextPackNode = Contex
   node_id?: string | undefined
   community?: number | null
   evidence_class: ContextPackEvidenceClass
+  expandable_ref?: ContextPackExpandablePreview
   estimate_tokens: () => number
   build_entry: () => TNode
 }
@@ -58,6 +65,25 @@ export type CompactContextPackMode =
     seed_labels?: readonly string[]
     max_supporting_nodes?: number
   }
+
+interface MaterializedNodeCandidate<TNode extends ContextPackNode = ContextPackNode> {
+  candidate: ContextPackNodeCandidate<TNode>
+  entry: TNode
+}
+
+const TEST_PATH_PATTERN = /(?:^|\/)(?:__tests__|tests?|fixtures?)(?:\/|$)|\.(?:test|spec)\.[^/]+$/i
+const CONFIG_PATH_PATTERN = /(?:^|\/)(?:config|configs?|settings|env)(?:\/|$)|(?:^|\/)\.env(?:\.[^/]+)?$|(?:^|\/)(?:package|tsconfig|vite|vitest|jest|eslint|prettier|rollup|webpack)\.(?:json|[cm]?js|ts|mjs|cjs)$/i
+const CONTRACT_PATH_PATTERN = /(?:^|\/)(?:contracts?|schemas?|dto|types?|interfaces?|openapi|graphql)(?:\/|$)|(?:^|\/)[^/]*\.d\.ts$/i
+const CONTRACT_NODE_KINDS = new Set(['interface', 'type', 'type_alias', 'typealias', 'enum', 'schema', 'contract'])
+const ALL_SEMANTIC_CATEGORIES: readonly ContextPackSemanticCategory[] = [
+  'implementation',
+  'changes',
+  'impact',
+  'tests',
+  'configuration',
+  'contracts',
+  'structure',
+]
 
 function includedNodeId(node: Pick<ContextPackNode, 'node_id'>): string | null {
   return typeof node.node_id === 'string' && node.node_id.length > 0 ? node.node_id : null
@@ -99,19 +125,17 @@ function classifyCoverageStatus(required: boolean, availableNodes: number, selec
 
 function coverageEntriesForCandidates(
   taskContract: ContextPackTaskContract,
-  nodes: readonly ContextPackNodeCandidate[],
+  nodes: readonly MaterializedNodeCandidate[],
+  selectedNodes: readonly MaterializedNodeCandidate[],
   selectedCounts: ReadonlyMap<ContextPackEvidenceClass, number>,
   relationshipCounts: { available: number; selected: number },
 ): ContextPackCoverage {
   const availableCounts = new Map<ContextPackEvidenceClass, number>()
   for (const node of nodes) {
-    availableCounts.set(node.evidence_class, (availableCounts.get(node.evidence_class) ?? 0) + 1)
+    availableCounts.set(node.candidate.evidence_class, (availableCounts.get(node.candidate.evidence_class) ?? 0) + 1)
   }
 
-  const evidenceClasses = [
-    ...taskContract.required_evidence,
-    ...[...availableCounts.keys()].filter((evidenceClass) => !taskContract.required_evidence.includes(evidenceClass)),
-  ]
+  const evidenceClasses = orderedEvidence(taskContract, availableCounts.keys())
 
   const entries: ContextPackCoverageEntry[] = evidenceClasses.map((evidence_class) => {
     const available_nodes = availableCounts.get(evidence_class) ?? 0
@@ -127,13 +151,125 @@ function coverageEntriesForCandidates(
     }
   })
 
+  const semanticAvailableCounts = semanticCategoryCounts(nodes)
+  const semanticSelectedCounts = semanticCategoryCounts(selectedNodes)
+  const semanticEntries = orderedSemanticCategories(
+    taskContract,
+    new Set([...semanticAvailableCounts.keys(), ...semanticSelectedCounts.keys()]),
+  ).map((category) => {
+    const available_nodes = semanticAvailableCounts.get(category) ?? 0
+    const selected_nodes = semanticSelectedCounts.get(category) ?? 0
+    const required = taskContract.semantic_required.includes(category)
+
+    return {
+      category,
+      label: semanticCoverageLabel(category),
+      required,
+      available_nodes,
+      selected_nodes,
+      status: classifyCoverageStatus(required, available_nodes, selected_nodes),
+    } satisfies ContextPackSemanticCoverageEntry
+  })
+
   return {
     required_evidence: [...taskContract.required_evidence],
+    semantic_required: [...taskContract.semantic_required],
+    semantic_optional: [...taskContract.semantic_optional],
     entries,
+    semantic_entries: semanticEntries,
     missing_required: entries.filter((entry) => entry.required && entry.selected_nodes === 0).map((entry) => entry.evidence_class),
+    missing_semantic: semanticEntries.filter((entry) => entry.required && entry.selected_nodes === 0).map((entry) => entry.category),
     available_relationships: relationshipCounts.available,
     selected_relationships: relationshipCounts.selected,
   }
+}
+
+function semanticCoverageLabel(category: ContextPackSemanticCategory): string {
+  return category.replace(/_/g, ' ')
+}
+
+function orderedSemanticCategories(
+  taskContract: ContextPackTaskContract,
+  categories: Iterable<ContextPackSemanticCategory>,
+): ContextPackSemanticCategory[] {
+  const ordered: ContextPackSemanticCategory[] = []
+  const seen = new Set<ContextPackSemanticCategory>()
+
+  for (const category of [
+    ...taskContract.semantic_required,
+    ...taskContract.semantic_optional,
+    ...categories,
+  ]) {
+    if (seen.has(category)) {
+      continue
+    }
+    seen.add(category)
+    ordered.push(category)
+  }
+
+  return ordered
+}
+
+function isTestEntry(entry: ContextPackNode): boolean {
+  return TEST_PATH_PATTERN.test(entry.source_file)
+}
+
+function isConfigurationEntry(entry: ContextPackNode): boolean {
+  if (CONFIG_PATH_PATTERN.test(entry.source_file)) {
+    return true
+  }
+
+  const text = `${entry.label} ${entry.snippet ?? ''}`.toLowerCase()
+  return text.includes('process.env') || text.includes('import.meta.env')
+}
+
+function isContractEntry(entry: ContextPackNode): boolean {
+  return CONTRACT_PATH_PATTERN.test(entry.source_file)
+    || (typeof entry.node_kind === 'string' && CONTRACT_NODE_KINDS.has(entry.node_kind.toLowerCase()))
+}
+
+function isImplementationEntry(entry: ContextPackNode): boolean {
+  return entry.file_type === 'code'
+    && !isTestEntry(entry)
+    && !isConfigurationEntry(entry)
+    && !isContractEntry(entry)
+}
+
+function semanticCategoryMatches(category: ContextPackSemanticCategory, node: MaterializedNodeCandidate): boolean {
+  switch (category) {
+    case 'implementation':
+      return isImplementationEntry(node.entry)
+    case 'changes':
+      return node.candidate.evidence_class === 'change'
+    case 'impact':
+      return node.candidate.evidence_class === 'impact'
+    case 'tests':
+      return isTestEntry(node.entry)
+    case 'configuration':
+      return isConfigurationEntry(node.entry)
+    case 'contracts':
+      return isContractEntry(node.entry)
+    case 'structure':
+      return node.candidate.evidence_class === 'structural'
+  }
+}
+
+function semanticCategoryCounts(
+  nodes: readonly MaterializedNodeCandidate[],
+): ReadonlyMap<ContextPackSemanticCategory, number> {
+  const counts = new Map<ContextPackSemanticCategory, number>()
+
+  for (const node of nodes) {
+    for (const category of ALL_SEMANTIC_CATEGORIES) {
+      if (!semanticCategoryMatches(category, node)) {
+        continue
+      }
+
+      counts.set(category, (counts.get(category) ?? 0) + 1)
+    }
+  }
+
+  return counts
 }
 
 function claimLabel(className: ContextPackEvidenceClass): string {
@@ -144,12 +280,9 @@ function buildClaims(
   taskContract: ContextPackTaskContract,
   labelsByEvidence: ReadonlyMap<ContextPackEvidenceClass, string[]>,
 ): ContextPackClaim[] {
-  const orderedEvidence = [
-    ...taskContract.required_evidence,
-    ...[...labelsByEvidence.keys()].filter((evidenceClass) => !taskContract.required_evidence.includes(evidenceClass)),
-  ]
+  const evidenceOrder = orderedEvidence(taskContract, labelsByEvidence.keys())
 
-  return orderedEvidence.flatMap((evidence_class) => {
+  return evidenceOrder.flatMap((evidence_class) => {
     const nodeLabels = labelsByEvidence.get(evidence_class) ?? []
     if (nodeLabels.length === 0) {
       return []
@@ -167,44 +300,220 @@ function buildExpandableRefs(
   taskContract: ContextPackTaskContract,
   omittedNodes: readonly ContextPackNodeCandidate[],
 ): ContextPackExpandableRef[] {
-  const omittedByEvidence = new Map<ContextPackEvidenceClass, string[]>()
+  const omittedByEvidence = new Map<ContextPackEvidenceClass, ContextPackExpandablePreview[]>()
   for (const node of omittedNodes) {
-    const labels = omittedByEvidence.get(node.evidence_class) ?? []
-    labels.push(node.label)
-    omittedByEvidence.set(node.evidence_class, labels)
+    const previews = omittedByEvidence.get(node.evidence_class) ?? []
+    previews.push(expandablePreviewForCandidate(node))
+    omittedByEvidence.set(node.evidence_class, previews)
   }
 
-  const orderedEvidence = [
-    ...taskContract.required_evidence,
-    ...[...omittedByEvidence.keys()].filter((evidenceClass) => !taskContract.required_evidence.includes(evidenceClass)),
-  ]
+  const evidenceOrder = orderedEvidence(taskContract, omittedByEvidence.keys())
 
-  return orderedEvidence.flatMap((evidence_class) => {
-    const labels = omittedByEvidence.get(evidence_class) ?? []
-    if (labels.length === 0) {
+  return evidenceOrder.flatMap((evidence_class) => {
+    const previews = omittedByEvidence.get(evidence_class) ?? []
+    if (previews.length === 0) {
       return []
     }
 
+    const handleId = stableExpandableHandleId(taskContract, evidence_class, previews)
     return [{
       kind: 'nodes',
+      handle_id: handleId,
       evidence_class,
-      count: labels.length,
-      preview_labels: labels.slice(0, 3),
+      count: previews.length,
+      preview: previews.slice(0, 3),
+      follow_up: expandableFollowUp(taskContract, evidence_class, previews),
     }]
   })
+}
+
+function normalizeExpandableLineRange(range: ContextPackExpandableLineRange | undefined): ContextPackExpandableLineRange | undefined {
+  if (!range) {
+    return undefined
+  }
+
+  const start = range.start_line
+  const end = range.end_line
+  if (!Number.isInteger(start) || start < 1 || !Number.isInteger(end) || end < 1) {
+    return undefined
+  }
+
+  return {
+    start_line: Math.min(start, end),
+    end_line: Math.max(start, end),
+  }
+}
+
+function expandablePreviewForCandidate(candidate: ContextPackNodeCandidate): ContextPackExpandablePreview {
+  let fallback: ContextPackNode | undefined
+  const fallbackEntry = (): ContextPackNode => {
+    fallback ??= candidate.build_entry()
+    return fallback
+  }
+  const providedLineRange = normalizeExpandableLineRange(candidate.expandable_ref?.line_range)
+  const lineRange = providedLineRange ?? (() => {
+    const entry = fallbackEntry()
+    return Number.isFinite(entry.line_number) && Number.isInteger(entry.line_number) && entry.line_number > 0
+      ? {
+          start_line: entry.line_number,
+          end_line: entry.line_number,
+        }
+      : undefined
+  })()
+  const fallbackNodeId = typeof candidate.node_id === 'string'
+    ? candidate.node_id
+    : typeof fallback?.node_id === 'string'
+      ? fallback.node_id
+      : undefined
+  const sourceFile = candidate.expandable_ref?.source_file ?? fallback?.source_file ?? fallbackEntry().source_file
+
+  return {
+    ...(typeof candidate.expandable_ref?.node_id === 'string'
+      ? { node_id: candidate.expandable_ref.node_id }
+      : typeof fallbackNodeId === 'string'
+        ? { node_id: fallbackNodeId }
+      : {}),
+    label: candidate.expandable_ref?.label ?? candidate.label,
+    source_file: sourceFile,
+    ...(lineRange ? { line_range: lineRange } : {}),
+  }
+}
+
+function expandablePreviewSignature(preview: ContextPackExpandablePreview): string {
+  const range = preview.line_range
+    ? `${preview.line_range.start_line}-${preview.line_range.end_line}`
+    : ''
+  return [
+    preview.node_id ?? '',
+    preview.label,
+    preview.source_file,
+    range,
+  ].join('\u0000')
+}
+
+function stableExpandableHandleId(
+  taskContract: ContextPackTaskContract,
+  evidenceClass: ContextPackEvidenceClass,
+  previews: readonly ContextPackExpandablePreview[],
+): string {
+  const digest = createHash('sha1')
+    .update(previews.map(expandablePreviewSignature).sort().join('\u0001'))
+    .digest('hex')
+    .slice(0, 12)
+  return `expand:${taskContract.task_kind}:${evidenceClass}:${digest}`
+}
+
+function sourceRangeSignature(range: ContextPackExpandableSourceRange): string {
+  return `${range.source_file}\u0000${range.start_line}\u0000${range.end_line}`
+}
+
+function expandableFollowUp(
+  taskContract: ContextPackTaskContract,
+  evidenceClass: ContextPackEvidenceClass,
+  previews: readonly ContextPackExpandablePreview[],
+): ContextPackExpandableFollowUp {
+  const focus_files = [...new Set(previews.map((preview) => preview.source_file).filter((sourceFile) => sourceFile.length > 0))]
+    .sort((left, right) => left.localeCompare(right))
+  const seenRanges = new Set<string>()
+  const focus_ranges: ContextPackExpandableSourceRange[] = []
+
+  for (const preview of previews) {
+    if (!preview.line_range) {
+      continue
+    }
+
+    const range = {
+      source_file: preview.source_file,
+      start_line: preview.line_range.start_line,
+      end_line: preview.line_range.end_line,
+    }
+    const signature = sourceRangeSignature(range)
+    if (seenRanges.has(signature)) {
+      continue
+    }
+
+    seenRanges.add(signature)
+    focus_ranges.push(range)
+  }
+
+  focus_ranges.sort((left, right) => {
+    return left.source_file.localeCompare(right.source_file)
+      || left.start_line - right.start_line
+      || left.end_line - right.end_line
+  })
+
+  return {
+    kind: 'context_pack',
+    task_kind: taskContract.task_kind,
+    evidence_class: evidenceClass,
+    focus_files,
+    focus_ranges,
+  }
 }
 
 export function classifyTaskContract(
   taskKind: ContextPackTaskKind,
   options: ClassifyTaskContractOptions,
 ): ContextPackTaskContract {
+  const recipe = resolveTaskEvidenceRecipe(taskKind, {
+    ...(options.task_intent ? { task_intent: options.task_intent } : {}),
+    ...(options.has_change_evidence !== undefined ? { has_change_evidence: options.has_change_evidence } : {}),
+  })
+
   return {
     version: 1,
     task_kind: taskKind,
+    ...(options.task_intent ? { task_intent: recipe.id } : {}),
+    evidence_recipe_id: recipe.id,
     budget: options.budget,
     ...(options.prompt ? { prompt: options.prompt } : {}),
-    required_evidence: [...REQUIRED_EVIDENCE_BY_TASK[taskKind]],
+    required_evidence: [...recipe.required_evidence],
+    preferred_evidence: [...recipe.preferred_evidence],
+    semantic_required: [...recipe.semantic_required],
+    semantic_optional: [...recipe.semantic_optional],
   }
+}
+
+function orderedEvidence(
+  taskContract: ContextPackTaskContract,
+  evidence: Iterable<ContextPackEvidenceClass>,
+): ContextPackEvidenceClass[] {
+  const ordered: ContextPackEvidenceClass[] = []
+  const seen = new Set<ContextPackEvidenceClass>()
+
+  for (const evidenceClass of [
+    ...taskContract.preferred_evidence,
+    ...taskContract.required_evidence,
+    ...evidence,
+  ]) {
+    if (seen.has(evidenceClass)) {
+      continue
+    }
+    seen.add(evidenceClass)
+    ordered.push(evidenceClass)
+  }
+
+  return ordered
+}
+
+function sortCandidatesByEvidence<TNode extends ContextPackNode>(
+  taskContract: ContextPackTaskContract,
+  nodes: readonly ContextPackNodeCandidate<TNode>[],
+): ContextPackNodeCandidate<TNode>[] {
+  const evidenceOrder = orderedEvidence(taskContract, nodes.map((node) => node.evidence_class))
+  const evidenceRanks = new Map(evidenceOrder.map((evidenceClass, index) => [evidenceClass, index]))
+
+  return nodes
+    .map((node, index) => ({ node, index }))
+    .sort((left, right) => {
+      const leftRank = evidenceRanks.get(left.node.evidence_class) ?? evidenceOrder.length
+      const rightRank = evidenceRanks.get(right.node.evidence_class) ?? evidenceOrder.length
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank
+      }
+      return left.index - right.index
+    })
+    .map((entry) => entry.node)
 }
 
 export function estimateContextPackEntryTokens(
@@ -223,22 +532,29 @@ export function compileContextPack<
 >(
   input: CompileContextPackInput<TNode, TRelationship, TCommunity>,
 ): CompiledContextPack<TNode, TRelationship, TCommunity> {
+  const orderedNodes = sortCandidatesByEvidence(input.task_contract, input.nodes)
+  const materializedNodes = orderedNodes.map((candidate) => ({
+    candidate,
+    entry: candidate.build_entry(),
+  }))
   const selectedNodes: TNode[] = []
+  const selectedMaterialized: MaterializedNodeCandidate<TNode>[] = []
   const selectedCounts = new Map<ContextPackEvidenceClass, number>()
   const selectedLabelsByEvidence = new Map<ContextPackEvidenceClass, string[]>()
   const selectedCommunities = new Set<number>()
   let tokenCount = 0
-  let breakIndex = input.nodes.length
+  let breakIndex = materializedNodes.length
 
-  for (const [index, candidate] of input.nodes.entries()) {
+  for (const [index, materialized] of materializedNodes.entries()) {
+    const { candidate, entry } = materialized
     const candidateTokens = candidate.estimate_tokens()
     if (tokenCount + candidateTokens > input.task_contract.budget && selectedNodes.length > 0) {
       breakIndex = index
       break
     }
 
-    const entry = candidate.build_entry()
     selectedNodes.push(entry)
+    selectedMaterialized.push(materialized)
     tokenCount += candidateTokens
     selectedCounts.set(candidate.evidence_class, (selectedCounts.get(candidate.evidence_class) ?? 0) + 1)
 
@@ -253,7 +569,7 @@ export function compileContextPack<
     }
   }
 
-  const omittedNodes = input.nodes.slice(breakIndex)
+  const omittedNodes = materializedNodes.slice(breakIndex).map(({ candidate }) => candidate)
   const relationships = filterRelationships(input.relationships ?? [], selectedNodes)
   const includedLabels = new Set(selectedNodes.map((node) => node.label))
 
@@ -267,7 +583,8 @@ export function compileContextPack<
     expandable: buildExpandableRefs(input.task_contract, omittedNodes),
     coverage: coverageEntriesForCandidates(
       input.task_contract,
-      input.nodes,
+      materializedNodes,
+      selectedMaterialized,
       selectedCounts,
       {
         available: input.relationships?.length ?? 0,

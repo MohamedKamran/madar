@@ -30,16 +30,36 @@ describe('context-pack', () => {
         task_kind: 'explain',
         budget: 320,
         required_evidence: ['primary', 'supporting', 'structural'],
+        semantic_required: ['implementation', 'structure'],
       }))
       expect(classifyTaskContract('review', { budget: 480, prompt: 'Review current changes' })).toEqual(expect.objectContaining({
         task_kind: 'review',
         budget: 480,
         required_evidence: ['change', 'supporting', 'impact'],
+        semantic_required: ['changes', 'impact'],
       }))
       expect(classifyTaskContract('impact', { budget: 640, prompt: 'Analyze blast radius' })).toEqual(expect.objectContaining({
         task_kind: 'impact',
         budget: 640,
         required_evidence: ['primary', 'impact', 'structural'],
+        semantic_required: ['implementation', 'impact', 'structure'],
+      }))
+    })
+
+    it('attaches task-specific evidence recipes when a planned intent is provided', () => {
+      expect(classifyTaskContract('review', {
+        budget: 480,
+        prompt: 'Audit the password reset flow for injection and auth bypass issues.',
+        task_intent: 'security-review',
+        has_change_evidence: true,
+      })).toEqual(expect.objectContaining({
+        task_kind: 'review',
+        task_intent: 'security-review',
+        evidence_recipe_id: 'security-review',
+        required_evidence: ['change', 'impact', 'supporting'],
+        preferred_evidence: ['change', 'impact', 'supporting', 'primary', 'structural'],
+        semantic_required: ['changes', 'impact', 'configuration'],
+        semantic_optional: ['tests', 'contracts'],
       }))
     })
   })
@@ -130,6 +150,7 @@ describe('context-pack', () => {
       ])
       expect(pack.coverage).toEqual(expect.objectContaining({
         missing_required: ['structural'],
+        missing_semantic: ['structure'],
         selected_relationships: 1,
       }))
       expect(pack.coverage.entries).toEqual(expect.arrayContaining([
@@ -137,13 +158,41 @@ describe('context-pack', () => {
         expect.objectContaining({ evidence_class: 'supporting', status: 'covered', selected_nodes: 1 }),
         expect.objectContaining({ evidence_class: 'structural', status: 'missing', selected_nodes: 0 }),
       ]))
+      expect(pack.coverage.semantic_entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: 'implementation', status: 'covered', selected_nodes: 2 }),
+        expect.objectContaining({ category: 'structure', status: 'missing', selected_nodes: 0 }),
+      ]))
       expect(pack.expandable).toEqual([
-        {
+        expect.objectContaining({
           kind: 'nodes',
+          handle_id: expect.stringMatching(/^expand:explain:structural:/),
           evidence_class: 'structural',
           count: 1,
-          preview_labels: ['Logger'],
-        },
+          preview: [
+            {
+              node_id: 'logger',
+              label: 'Logger',
+              source_file: 'src/logger.ts',
+              line_range: {
+                start_line: 3,
+                end_line: 3,
+              },
+            },
+          ],
+          follow_up: {
+            kind: 'context_pack',
+            task_kind: 'explain',
+            evidence_class: 'structural',
+            focus_files: ['src/logger.ts'],
+            focus_ranges: [
+              {
+                source_file: 'src/logger.ts',
+                start_line: 3,
+                end_line: 3,
+              },
+            ],
+          },
+        }),
       ])
       expect(pack.graph_signals).toEqual({
         god_nodes: [],
@@ -190,11 +239,274 @@ describe('context-pack', () => {
         expect.objectContaining({ evidence_class: 'supporting', status: 'missing', selected_nodes: 0 }),
       ]))
       expect(pack.expandable).toEqual([
-        {
+        expect.objectContaining({
           kind: 'nodes',
+          handle_id: expect.stringMatching(/^expand:review:supporting:/),
           evidence_class: 'supporting',
           count: 1,
-          preview_labels: ['ApiHandler'],
+          preview: [
+            {
+              node_id: 'api_handler',
+              label: 'ApiHandler',
+              source_file: 'src/api.ts',
+              line_range: {
+                start_line: 20,
+                end_line: 20,
+              },
+            },
+          ],
+          follow_up: {
+            kind: 'context_pack',
+            task_kind: 'review',
+            evidence_class: 'supporting',
+            focus_files: ['src/api.ts'],
+            focus_ranges: [
+              {
+                source_file: 'src/api.ts',
+                start_line: 20,
+                end_line: 20,
+              },
+            ],
+          },
+        }),
+      ])
+    })
+
+    it('reorders selected review evidence based on the task-specific recipe preferences', () => {
+      const nodes = [
+        nodeCandidate({
+          node_id: 'changed_handler',
+          label: 'ChangedHandler',
+          source_file: 'src/auth.ts',
+          line_number: 10,
+          file_type: 'code',
+          snippet: 'export function ChangedHandler() {}',
+          match_score: 10,
+          relevance_band: 'direct',
+          community: 0,
+          community_label: 'Auth',
+        }, 'change', 8),
+        nodeCandidate({
+          node_id: 'supporting_fixture',
+          label: 'SupportingFixture',
+          source_file: 'tests/auth.test.ts',
+          line_number: 4,
+          file_type: 'code',
+          snippet: 'expect(refresh()).toBeTruthy()',
+          match_score: 8,
+          relevance_band: 'related',
+          community: 1,
+          community_label: 'Tests',
+        }, 'supporting', 6),
+        nodeCandidate({
+          node_id: 'auth_bypass_path',
+          label: 'AuthBypassPath',
+          source_file: 'src/reset.ts',
+          line_number: 18,
+          file_type: 'code',
+          snippet: 'if (token === "debug") return true',
+          match_score: 7,
+          relevance_band: 'related',
+          community: 2,
+          community_label: 'Security',
+        }, 'impact', 6),
+      ] as const
+
+      const genericReviewPack = compileContextPack({
+        task_contract: classifyTaskContract('review', {
+          budget: 14,
+          prompt: 'Review auth changes',
+        }),
+        nodes,
+      })
+      const securityReviewPack = compileContextPack({
+        task_contract: classifyTaskContract('review', {
+          budget: 14,
+          prompt: 'Audit the password reset flow for injection and auth bypass issues.',
+          task_intent: 'security-review',
+          has_change_evidence: true,
+        }),
+        nodes,
+      })
+
+      expect(genericReviewPack.nodes.map((node) => node.label)).toEqual(['ChangedHandler', 'SupportingFixture'])
+      expect(securityReviewPack.nodes.map((node) => node.label)).toEqual(['ChangedHandler', 'AuthBypassPath'])
+      expect(securityReviewPack.coverage.required_evidence).toEqual(['change', 'impact', 'supporting'])
+      expect(securityReviewPack.coverage.semantic_required).toEqual(['changes', 'impact', 'configuration'])
+      expect(securityReviewPack.coverage.missing_semantic).toEqual(['configuration'])
+      expect(securityReviewPack.coverage.semantic_entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: 'changes', status: 'covered', selected_nodes: 1 }),
+        expect.objectContaining({ category: 'impact', status: 'covered', selected_nodes: 1 }),
+        expect.objectContaining({ category: 'tests', status: 'available', available_nodes: 1, selected_nodes: 0 }),
+        expect.objectContaining({ category: 'configuration', status: 'missing', selected_nodes: 0 }),
+      ]))
+      expect(securityReviewPack.claims[1]).toEqual(expect.objectContaining({
+        evidence_class: 'impact',
+        node_labels: ['AuthBypassPath'],
+      }))
+    })
+
+    it('builds stable expandable handle ids for the same omitted evidence set', () => {
+      const first = compileContextPack({
+        task_contract: classifyTaskContract('explain', { budget: 10, prompt: 'Explain auth flow' }),
+        nodes: [
+          nodeCandidate({
+            node_id: 'auth_service',
+            label: 'AuthService',
+            source_file: 'src/auth.ts',
+            line_number: 10,
+            file_type: 'code',
+            snippet: 'export function AuthService() {}',
+            match_score: 9,
+            relevance_band: 'direct',
+            community: 0,
+            community_label: 'Auth',
+          }, 'primary', 10),
+          nodeCandidate({
+            node_id: 'session_manager',
+            label: 'SessionManager',
+            source_file: 'src/session.ts',
+            line_number: 20,
+            file_type: 'code',
+            snippet: 'export class SessionManager {}',
+            match_score: 5,
+            relevance_band: 'related',
+            community: 1,
+            community_label: 'Session',
+          }, 'supporting', 9),
+          nodeCandidate({
+            node_id: 'session_policy',
+            label: 'SessionPolicy',
+            source_file: 'src/session-policy.ts',
+            line_number: 24,
+            file_type: 'code',
+            snippet: 'export class SessionPolicy {}',
+            match_score: 4,
+            relevance_band: 'related',
+            community: 1,
+            community_label: 'Session',
+          }, 'supporting', 8),
+        ],
+      })
+      const second = compileContextPack({
+        task_contract: classifyTaskContract('explain', { budget: 10, prompt: 'Explain auth flow' }),
+        nodes: [
+          nodeCandidate({
+            node_id: 'auth_service',
+            label: 'AuthService',
+            source_file: 'src/auth.ts',
+            line_number: 10,
+            file_type: 'code',
+            snippet: 'export function AuthService() {}',
+            match_score: 9,
+            relevance_band: 'direct',
+            community: 0,
+            community_label: 'Auth',
+          }, 'primary', 10),
+          nodeCandidate({
+            node_id: 'session_policy',
+            label: 'SessionPolicy',
+            source_file: 'src/session-policy.ts',
+            line_number: 24,
+            file_type: 'code',
+            snippet: 'export class SessionPolicy {}',
+            match_score: 4,
+            relevance_band: 'related',
+            community: 1,
+            community_label: 'Session',
+          }, 'supporting', 8),
+          nodeCandidate({
+            node_id: 'session_manager',
+            label: 'SessionManager',
+            source_file: 'src/session.ts',
+            line_number: 20,
+            file_type: 'code',
+            snippet: 'export class SessionManager {}',
+            match_score: 5,
+            relevance_band: 'related',
+            community: 1,
+            community_label: 'Session',
+          }, 'supporting', 9),
+        ],
+      })
+
+      expect(first.expandable[0]?.handle_id).toBe(second.expandable[0]?.handle_id)
+      expect(first.expandable[0]?.follow_up).toEqual({
+        kind: 'context_pack',
+        task_kind: 'explain',
+        evidence_class: 'supporting',
+        focus_files: ['src/session-policy.ts', 'src/session.ts'],
+        focus_ranges: [
+          {
+            source_file: 'src/session-policy.ts',
+            start_line: 24,
+            end_line: 24,
+          },
+          {
+            source_file: 'src/session.ts',
+            start_line: 20,
+            end_line: 20,
+          },
+        ],
+      })
+    })
+
+    it('ignores non-finite expandable ranges and falls back to entry line numbers', () => {
+      const pack = compileContextPack({
+        task_contract: classifyTaskContract('explain', { budget: 10, prompt: 'Explain auth flow' }),
+        nodes: [
+          nodeCandidate({
+            node_id: 'auth_service',
+            label: 'AuthService',
+            source_file: 'src/auth.ts',
+            line_number: 10,
+            file_type: 'code',
+            snippet: 'export function AuthService() {}',
+            match_score: 9,
+            relevance_band: 'direct',
+            community: 0,
+            community_label: 'Auth',
+          }, 'primary', 10),
+          {
+            ...nodeCandidate({
+              node_id: 'logger',
+              label: 'Logger',
+              source_file: 'src/logger.ts',
+              line_number: 3,
+              file_type: 'code',
+              snippet: 'export const Logger = console',
+              match_score: 2,
+              relevance_band: 'peripheral',
+              community: 2,
+              community_label: 'Observability',
+            }, 'structural', 9),
+            expandable_ref: {
+              node_id: 'logger',
+              label: 'Logger',
+              source_file: 'src/logger.ts',
+              line_range: {
+                start_line: Number.NaN,
+                end_line: Number.POSITIVE_INFINITY,
+              },
+            },
+          },
+        ],
+      })
+
+      expect(pack.expandable[0]?.preview[0]).toEqual({
+        node_id: 'logger',
+        label: 'Logger',
+        source_file: 'src/logger.ts',
+        line_range: {
+          start_line: 3,
+          end_line: 3,
+        },
+      })
+      expect(pack.expandable[0]?.follow_up.focus_ranges).toEqual([
+        {
+          source_file: 'src/logger.ts',
+          start_line: 3,
+          end_line: 3,
         },
       ])
     })
@@ -252,8 +564,12 @@ describe('context-pack', () => {
         expandable: [],
         coverage: {
           required_evidence: ['primary', 'supporting', 'structural'],
+          semantic_required: ['implementation', 'structure'],
+          semantic_optional: ['contracts', 'configuration', 'tests'],
           entries: [],
+          semantic_entries: [],
           missing_required: ['structural'],
+          missing_semantic: ['structure'],
           available_relationships: 1,
           selected_relationships: 1,
         },
@@ -323,8 +639,12 @@ describe('context-pack', () => {
         expandable: [],
         coverage: {
           required_evidence: ['change', 'supporting', 'impact'],
+          semantic_required: ['changes', 'impact'],
+          semantic_optional: ['tests', 'configuration', 'contracts'],
           entries: [],
+          semantic_entries: [],
           missing_required: ['impact'],
+          missing_semantic: ['impact'],
           available_relationships: 1,
           selected_relationships: 1,
         },

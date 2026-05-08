@@ -69,19 +69,74 @@ These examples show what your AI agent sees when it calls graphify-ts MCP tools.
   "expandable": [
     {
       "kind": "nodes",
+      "handle_id": "expand:explain:structural:9e7d4c2a11f0",
       "evidence_class": "structural",
       "count": 3,
-      "preview_labels": ["BillingModule", "WebhookController", "CustomerLedger"]
+      "preview": [
+        {
+          "node_id": "billing_module",
+          "label": "BillingModule",
+          "source_file": "backend/src/modules/billing/billing.module.ts",
+          "line_range": { "start_line": 1, "end_line": 42 }
+        },
+        {
+          "node_id": "webhook_controller",
+          "label": "WebhookController",
+          "source_file": "backend/src/modules/billing/controllers/webhook.controller.ts",
+          "line_range": { "start_line": 10, "end_line": 86 }
+        },
+        {
+          "node_id": "customer_ledger",
+          "label": "CustomerLedger",
+          "source_file": "backend/src/modules/billing/domain/customer-ledger.ts",
+          "line_range": { "start_line": 5, "end_line": 33 }
+        }
+      ],
+      "follow_up": {
+        "kind": "context_pack",
+        "task_kind": "explain",
+        "evidence_class": "structural",
+        "focus_files": [
+          "backend/src/modules/billing/billing.module.ts",
+          "backend/src/modules/billing/controllers/webhook.controller.ts",
+          "backend/src/modules/billing/domain/customer-ledger.ts"
+        ],
+        "focus_ranges": [
+          {
+            "source_file": "backend/src/modules/billing/billing.module.ts",
+            "start_line": 1,
+            "end_line": 42
+          },
+          {
+            "source_file": "backend/src/modules/billing/controllers/webhook.controller.ts",
+            "start_line": 10,
+            "end_line": 86
+          },
+          {
+            "source_file": "backend/src/modules/billing/domain/customer-ledger.ts",
+            "start_line": 5,
+            "end_line": 33
+          }
+        ]
+      }
     }
   ],
   "coverage": {
     "required_evidence": ["primary", "supporting", "structural"],
+    "semantic_required": ["implementation", "structure"],
+    "semantic_optional": ["contracts", "configuration", "tests"],
     "entries": [
       { "evidence_class": "primary", "required": true, "available_nodes": 1, "selected_nodes": 1, "status": "covered" },
       { "evidence_class": "supporting", "required": true, "available_nodes": 2, "selected_nodes": 1, "status": "covered" },
       { "evidence_class": "structural", "required": true, "available_nodes": 3, "selected_nodes": 0, "status": "missing" }
     ],
+    "semantic_entries": [
+      { "category": "implementation", "label": "implementation", "required": true, "available_nodes": 2, "selected_nodes": 2, "status": "covered" },
+      { "category": "structure", "label": "structure", "required": true, "available_nodes": 3, "selected_nodes": 0, "status": "missing" },
+      { "category": "tests", "label": "tests", "required": false, "available_nodes": 1, "selected_nodes": 0, "status": "available" }
+    ],
     "missing_required": ["structural"],
+    "missing_semantic": ["structure"],
     "available_relationships": 7,
     "selected_relationships": 1
   },
@@ -89,7 +144,58 @@ These examples show what your AI agent sees when it calls graphify-ts MCP tools.
 }
 ```
 
-**What the agent does with this:** Uses the compact pack as a coverage contract: answer with the selected evidence now, and only expand omitted structural refs if the question needs more detail.
+**What the agent does with this:** Uses the compact pack as a coverage contract and answers now with the selected evidence. Then it inspects `semantic_entries` to see whether implementation, structure, and tests are sufficiently covered. Only when coverage is still missing does it call `context_expand` with the stable `handle_id`.
+
+---
+
+## context_expand — Reopen Omitted Context
+
+**Agent calls:**
+```json
+{ "name": "context_expand", "arguments": { "handle_id": "expand:explain:structural:9e7d4c2a11f0", "budget": 900 } }
+```
+
+**Agent receives:**
+```json
+{
+  "handle_id": "expand:explain:structural:9e7d4c2a11f0",
+  "task": "explain",
+  "task_intent": "explain",
+  "prompt": "how does payment processing work?",
+  "budget": 900,
+  "pack": {
+    "question": "how does payment processing work?",
+    "token_count": 612,
+    "matched_nodes": [
+      {
+        "label": "BillingModule",
+        "source_file": "backend/src/modules/billing/billing.module.ts",
+        "line_number": 1,
+        "snippet": null,
+        "match_score": 0,
+        "relevance_band": "related",
+        "community": 8,
+        "community_label": "Backend Billing",
+        "evidence_class": "structural"
+      }
+    ],
+    "relationships": [],
+    "community_context": [
+      { "id": 8, "label": "Backend Billing", "node_count": 23 }
+    ]
+  },
+  "claims": [
+    {
+      "evidence_class": "structural",
+      "text": "structural evidence: BillingModule",
+      "node_labels": ["BillingModule"]
+    }
+  ],
+  "missing_context": []
+}
+```
+
+**What the agent does with this:** Expands only the omitted slice that mattered, without regenerating the whole pack or losing the original task/session context.
 
 ---
 
