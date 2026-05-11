@@ -417,10 +417,20 @@ function eligibleNodeEntries(graph: KnowledgeGraph, options: Pick<RetrieveOption
   })
 }
 
+function frameworkMetadataFromAttributes(attributes: Record<string, unknown>): FrameworkNodeMetadata {
+  const out: FrameworkNodeMetadata = {}
+  for (const key of ['route_path', 'http_method', 'mount_path', 'slice_name', 'procedure_name', 'router_name'] as const) {
+    const value = attributes[key]
+    if (typeof value === 'string' && value.length > 0) out[key] = value
+  }
+  return out
+}
+
 function scoredNodeFromGraphEntry(
   id: string,
   attributes: Record<string, unknown>,
   frameworkProfile: FrameworkQuestionProfile,
+  questionLower = '',
 ): ScoredNode {
   const resolvedLine = resolvedLineNumber(attributes)
   const nodeKind = String(attributes.node_kind ?? '')
@@ -443,7 +453,7 @@ function scoredNodeFromGraphEntry(
     fileType: String(attributes.file_type ?? '').trim().toLowerCase(),
     fileNodeLike: isFileNodeLike(String(attributes.label ?? ''), String(attributes.source_file ?? '')),
     community: parseCommunityId(attributes.community),
-    frameworkBoost: frameworkBoostForNode(frameworkProfile, nodeKind, frameworkRole),
+    frameworkBoost: frameworkBoostForNode(frameworkProfile, nodeKind, frameworkRole, frameworkMetadataFromAttributes(attributes), questionLower),
     exactLabelMatch: false,
     sourcePathMatch: false,
     evidenceTier: 0,
@@ -911,16 +921,86 @@ function buildFrameworkQuestionProfile(question: string, questionTokens: readonl
   }
 }
 
+/** Metadata available on a node for framework-aware boost matching. All
+ *  fields are optional because not every node carries every field — only
+ *  framework-tagged nodes do, and even then the SPI projector only emits
+ *  the ones each substrate populates. */
+interface FrameworkNodeMetadata {
+  /** Express / Hono / Fastify / Next.js — the URL path string. */
+  route_path?: string
+  /** Express / Hono / Fastify / Next.js route-handler — the HTTP method. */
+  http_method?: string
+  /** Express / Fastify middleware mount prefix, or Fastify plugin prefix. */
+  mount_path?: string
+  /** Redux createSlice name. */
+  slice_name?: string
+  /** tRPC procedure name (e.g. 'getUser', 'createOrder'). */
+  procedure_name?: string
+  /** tRPC router-name prefix on synthesized procedures. */
+  router_name?: string
+}
+
 function frameworkBoostForNode(
   profile: FrameworkQuestionProfile,
   nodeKind: string,
   frameworkRole: string,
+  metadata: FrameworkNodeMetadata = {},
+  questionLower = '',
 ): number {
   if (!profile.frameworkShaped) {
     return 0
   }
 
   let boost = 0
+
+  // #133 — metadata-aware boost. When the question contains a substring
+  // that matches the node's structural metadata (route_path, http_method,
+  // mount_path, slice_name, procedure_name), add a big targeted boost so
+  // the structurally-correct node beats accidental label matches.
+  if (metadata.route_path && questionLower) {
+    const rp = metadata.route_path.toLowerCase()
+    // Exact substring match between question and the route path string.
+    // Conservative: require at least 3 chars so '/' alone doesn't fire.
+    if (rp.length >= 3 && questionLower.includes(rp)) {
+      boost += 3
+    }
+  }
+  if (metadata.http_method && questionLower) {
+    // CodeRabbit fix: word-boundary check so http_method 'GET' doesn't
+    // match 'budget' / 'forget' / 'target' / etc. Verb is lowercased to
+    // match questionLower which is already lowercased upstream.
+    // CodeRabbit follow-up: escape regex metacharacters so an unexpected
+    // verb (e.g. user-supplied data leaking in via SPI metadata) can't
+    // break the RegExp constructor or match unintended substrings.
+    const verb = metadata.http_method.toLowerCase()
+    if (verb && new RegExp(`\\b${verb.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}\\b`).test(questionLower)) {
+      boost += 1.5
+    }
+  }
+  if (metadata.mount_path && questionLower) {
+    const mp = metadata.mount_path.toLowerCase()
+    if (mp.length >= 3 && questionLower.includes(mp)) {
+      boost += 1.5
+    }
+  }
+  if (metadata.slice_name && questionLower) {
+    const sn = metadata.slice_name.toLowerCase()
+    if (sn.length >= 2 && questionLower.includes(sn)) {
+      boost += 2
+    }
+  }
+  if (metadata.procedure_name && questionLower) {
+    const pn = metadata.procedure_name.toLowerCase()
+    if (pn.length >= 2 && questionLower.includes(pn)) {
+      boost += 2
+    }
+  }
+  if (metadata.router_name && questionLower) {
+    const rn = metadata.router_name.toLowerCase()
+    if (rn.length >= 2 && questionLower.includes(rn)) {
+      boost += 1
+    }
+  }
 
   if (profile.express) {
     if (frameworkRole === 'express_route') {
@@ -1302,6 +1382,9 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
   // Pre-compute community labels so seed scoring can treat them as secondary evidence.
   const communities = communitiesFromGraph(graph)
   const frameworkProfile = buildFrameworkQuestionProfile(question, questionTokens)
+  // #133 — lowercase question for metadata substring matching (route_path,
+  // http_method, slice_name, procedure_name, mount_path).
+  const questionLower = question.toLowerCase()
   const fileOrientedQuestion = questionLooksFileOriented(question, questionTokens)
   const activeFrameworks = activeFrameworksForProfile(frameworkProfile)
   const communityLabels: Record<number, string> = {
@@ -1341,7 +1424,19 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
       { fileNodeLike, fileOrientedQuestion },
     )
 
-    if (score.total > 0) {
+    // CodeRabbit fix: compute framework boost BEFORE the seed gate so
+    // metadata-only matches (e.g. a `handler()` node tagged with
+    // route_path that the question names verbatim) can become a seed
+    // even when the label has no token overlap.
+    const metadataBoost = frameworkBoostForNode(
+      frameworkProfile,
+      nodeKind,
+      frameworkRole,
+      frameworkMetadataFromAttributes(attributes),
+      questionLower,
+    )
+
+    if (score.total > 0 || metadataBoost > 0) {
       const resolvedLine = resolvedLineNumber(attributes)
       seedCandidates.push({
         id,
@@ -1359,11 +1454,15 @@ export function retrieveContext(graph: KnowledgeGraph, options: RetrieveOptions)
         fileType,
         fileNodeLike,
         community,
-        frameworkBoost: frameworkBoostForNode(frameworkProfile, nodeKind, frameworkRole),
+        frameworkBoost: metadataBoost,
         seedScore: score,
         exactLabelMatch: score.labelExactScore > 0,
         sourcePathMatch: score.sourcePathScore > 0,
-        evidenceTier: evidenceTierForSeedScore(score),
+        // When the seed only made it in via metadata boost, give it at
+        // least evidence tier 1 so it's not at the bottom of the heap.
+        evidenceTier: metadataBoost > 0
+          ? (Math.max(evidenceTierForSeedScore(score), 1) as 0 | 1 | 2)
+          : evidenceTierForSeedScore(score),
         relevanceBand: score.labelExactScore > 0 || score.labelTokenScore > 0 ? 'direct' : 'related',
       })
     }
@@ -1624,9 +1723,10 @@ export async function retrieveContextAsync(graph: KnowledgeGraph, options: Retri
     }),
   )
 
+  const questionLower = options.question.toLowerCase()
   const candidatesById = new Map(
     eligibleNodeEntries(graph, options)
-      .map(([id, attributes]) => [id, scoredNodeFromGraphEntry(id, attributes, frameworkProfile)] as const),
+      .map(([id, attributes]) => [id, scoredNodeFromGraphEntry(id, attributes, frameworkProfile, questionLower)] as const),
   )
   if (candidatesById.size === 0) {
     return lexicalResult
@@ -1673,7 +1773,13 @@ export async function retrieveContextAsync(graph: KnowledgeGraph, options: Retri
     const lexicalScore = lexicalScoresById.get(candidate.id) ?? 0
     const semanticScore = semanticScores.get(candidate.id) ?? 0
     const rerankScore = rerankScores.get(candidate.id) ?? 0
-    candidate.score = lexicalScore + candidate.frameworkBoost + (semanticScore * 3) + (rerankScore * 4)
+    // CodeRabbit fix: when this candidate already won lexical retrieval
+    // (lexicalScore > 0), frameworkBoost is ALREADY baked into
+    // match_score by retrieveContext upstream — adding it here would
+    // double-count. Only add it for semantic-only candidates where the
+    // lexical pass missed but the metadata signal is real.
+    const additionalFrameworkBoost = lexicalScore > 0 ? 0 : candidate.frameworkBoost
+    candidate.score = lexicalScore + additionalFrameworkBoost + (semanticScore * 3) + (rerankScore * 4)
     candidate.evidenceTier = lexicalScore > 0 ? 2 : semanticScore > 0 || rerankScore > 0 ? 1 : 0
     candidate.relevanceBand = lexicalBandsById.get(candidate.id) ?? (semanticScore >= 0.75 || rerankScore >= 0.75 ? 'direct' : 'related')
     candidate.exactLabelMatch = lexicalScore > 0
