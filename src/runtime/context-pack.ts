@@ -24,6 +24,7 @@ import type { RetrievalGateDecision } from '../contracts/retrieval-gate.js'
 import type { TaskIntentKind } from '../contracts/task-intent.js'
 import { estimateQueryTokens } from './serve.js'
 import { resolveTaskEvidenceRecipe } from './task-evidence-recipes.js'
+import { selectByValuePerToken, type ValuePerTokenCandidate } from './value-per-token.js'
 
 export interface ClassifyTaskContractOptions {
   budget: number
@@ -64,6 +65,17 @@ export interface CompileContextPackInput<
    * compute it once and pass the result down.
    */
   retrieval_gate?: RetrievalGateDecision
+  /**
+   * v0.20 #131 — strategy for choosing candidates under budget:
+   *   - 'evidence-order' (default): walk sortCandidatesByEvidence order,
+   *     take until budget overflow. Same behaviour as v0.19 and earlier.
+   *   - 'value-per-token': required-evidence-class candidates are
+   *     placed first (must-include), then the remaining optional
+   *     candidates are picked by density (score / token_cost) via
+   *     selectByValuePerToken. Higher information density per token at
+   *     the same budget.
+   */
+  selection_strategy?: 'evidence-order' | 'value-per-token'
 }
 
 export type CompactContextPackMode =
@@ -610,16 +622,16 @@ export function compileContextPack<
   const selectedCounts = new Map<ContextPackEvidenceClass, number>()
   const selectedLabelsByEvidence = new Map<ContextPackEvidenceClass, string[]>()
   const selectedCommunities = new Set<number>()
+  // CodeRabbit fix: track placed candidate objects directly. Earlier
+  // version derived omittedNodes from materialized label:source_file:line
+  // triples, which can mis-attribute when build_entry fills in missing
+  // source metadata or when two distinct candidates share the same triple.
+  const placedCandidates = new Set<ContextPackNodeCandidate<TNode>>()
   let tokenCount = 0
   let breakIndex = orderedNodes.length
 
-  for (const [index, candidate] of orderedNodes.entries()) {
-    const candidateTokens = candidate.estimate_tokens()
-    if (tokenCount + candidateTokens > input.task_contract.budget && selectedNodes.length > 0) {
-      breakIndex = index
-      break
-    }
-
+  const placeCandidate = (candidate: ContextPackNodeCandidate<TNode>, candidateTokens: number): void => {
+    placedCandidates.add(candidate)
     const entry = candidate.build_entry()
     selectedNodes.push(entry)
     selectedCoverage.push({
@@ -646,7 +658,78 @@ export function compileContextPack<
     }
   }
 
-  const omittedNodes = orderedNodes.slice(breakIndex)
+  if (input.selection_strategy === 'value-per-token') {
+    // v0.20 #131 — density-greedy selection.
+    //
+    // 1. Place required-evidence-class candidates greedily (must-include).
+    //    These can't be dropped via density even if they're expensive, so
+    //    the budget for the remainder is what's left after their cost.
+    // 2. The remainder pool (optional candidates) goes through
+    //    selectByValuePerToken with the residual budget. Density
+    //    (score / token_cost) drives which optional nodes survive.
+    const requiredClasses = new Set(input.task_contract.required_evidence)
+    const requiredCandidates: ContextPackNodeCandidate<TNode>[] = []
+    const optionalCandidates: ContextPackNodeCandidate<TNode>[] = []
+    for (const candidate of orderedNodes) {
+      if (requiredClasses.has(candidate.evidence_class)) {
+        requiredCandidates.push(candidate)
+      } else {
+        optionalCandidates.push(candidate)
+      }
+    }
+    // CodeRabbit fix: skip individual oversize required candidates with
+    // `continue` instead of `break`, so one fat required entry doesn't
+    // kill subsequent smaller required ones. The break-on-first-overflow
+    // mirrored the evidence-order loop but is wrong here — required
+    // candidates each have an independent must-include semantic.
+    for (const candidate of requiredCandidates) {
+      const candidateTokens = candidate.estimate_tokens()
+      if (tokenCount + candidateTokens > input.task_contract.budget && selectedNodes.length > 0) {
+        continue
+      }
+      placeCandidate(candidate, candidateTokens)
+    }
+    const remainingBudget = Math.max(0, input.task_contract.budget - tokenCount)
+    // CodeRabbit fix: rank score uses each optional's position in
+    // orderedNodes (the global rank), not its index within
+    // optionalCandidates. Otherwise a leading run of required
+    // candidates would compress the optional rank space and inflate
+    // every optional's score.
+    const orderedNodeIndex = new Map<ContextPackNodeCandidate<TNode>, number>(
+      orderedNodes.map((c, i) => [c, i] as const),
+    )
+    const valueCandidates: Array<ValuePerTokenCandidate<ContextPackNodeCandidate<TNode>>> = optionalCandidates.map((candidate) => {
+      const orderedIdx = orderedNodeIndex.get(candidate) ?? orderedNodes.length
+      return {
+        id: `${candidate.label}:${candidate.source_file}:${candidate.line_number}`,
+        payload: candidate,
+        score: 1 / (orderedIdx + 1),
+        token_cost: candidate.estimate_tokens(),
+      }
+    })
+    const valueResult = selectByValuePerToken(valueCandidates, { budget: remainingBudget })
+    for (const sel of valueResult.selected) {
+      placeCandidate(sel.payload, sel.token_cost)
+    }
+    void breakIndex
+  } else {
+    for (const [index, candidate] of orderedNodes.entries()) {
+      const candidateTokens = candidate.estimate_tokens()
+      if (tokenCount + candidateTokens > input.task_contract.budget && selectedNodes.length > 0) {
+        breakIndex = index
+        break
+      }
+      placeCandidate(candidate, candidateTokens)
+    }
+  }
+
+  // omittedNodes is what we couldn't fit. For evidence-order it's the
+  // tail after the break; for value-per-token it's the set difference
+  // between orderedNodes and what placeCandidate accepted (CodeRabbit
+  // fix: use the candidate-identity Set instead of materialized triples).
+  const omittedNodes = input.selection_strategy === 'value-per-token'
+    ? orderedNodes.filter((c) => !placedCandidates.has(c))
+    : orderedNodes.slice(breakIndex)
   const relationships = filterRelationships(input.relationships ?? [], selectedNodes)
   const includedLabels = new Set(selectedNodes.map((node) => node.label))
 

@@ -21,7 +21,7 @@
 
 import type { ContextPackNode } from '../contracts/context-pack.js'
 
-export type ContextPackResolution = 'detail' | 'summary' | 'mixed'
+export type ContextPackResolution = 'detail' | 'summary' | 'mixed' | 'signature'
 
 export interface ApplyResolutionOptions {
   resolution: ContextPackResolution
@@ -32,8 +32,10 @@ export interface ApplyResolutionOptions {
 
 export interface ApplyResolutionResult<T extends ContextPackNode> {
   nodes: T[]
-  /** Per-node resolution after applying. Useful for diagnostics. */
-  resolution_map: Array<{ node_id: string | undefined; resolution: 'detail' | 'summary' }>
+  /** Per-node resolution after applying. Useful for diagnostics.
+   *  v0.20 #132: includes 'signature' for nodes where the body was
+   *  dropped but the function signature retained. */
+  resolution_map: Array<{ node_id: string | undefined; resolution: 'detail' | 'summary' | 'signature' }>
   /** Estimated bytes saved (rough — based on dropped snippet length). */
   bytes_saved: number
 }
@@ -56,9 +58,55 @@ export function applyContextPackResolution<T extends ContextPackNode>(
     return summarizeAll(nodes)
   }
 
+  if (options.resolution === 'signature') {
+    return signatureResolution(nodes)
+  }
+
   // mixed: top-N detail by match_score desc, rest summary.
   const n = options.detail_top_n ?? Math.ceil(nodes.length / 3)
   return mixedResolution(nodes, Math.max(0, n))
+}
+
+/** Signature resolution: keep the first 1-2 lines of the snippet (the
+ *  function/class signature) and drop the body. Middle ground between
+ *  full `detail` and bare `summary`. Useful when the agent needs to see
+ *  parameter types and return shape but doesn't need the body.
+ *
+ *  Heuristic: keep lines up to and including the line that ends with `{`
+ *  (the opening brace), then drop the rest. If no `{` is found in the
+ *  first 3 lines, keep the first 2 lines as a best-effort signature. */
+function signatureResolution<T extends ContextPackNode>(
+  nodes: ReadonlyArray<T>,
+): ApplyResolutionResult<T> {
+  let bytesSaved = 0
+  const transformed = nodes.map((node) => {
+    if (typeof node.snippet !== 'string' || node.snippet.length === 0) return node
+    const sig = extractSignature(node.snippet)
+    bytesSaved += Math.max(0, node.snippet.length - sig.length)
+    return { ...node, snippet: sig } as T
+  })
+  return {
+    nodes: transformed,
+    // CodeRabbit fix: signature mode is its own resolution, NOT 'summary'.
+    // Downstream diagnostics differentiate 'has signature info' from
+    // 'has no body at all'.
+    resolution_map: nodes.map((n) => ({ node_id: n.node_id, resolution: 'signature' as const })),
+    bytes_saved: bytesSaved,
+  }
+}
+
+function extractSignature(snippet: string): string {
+  const lines = snippet.split('\n')
+  for (let i = 0; i < Math.min(3, lines.length); i += 1) {
+    const line = lines[i]
+    if (line === undefined) continue
+    if (line.trimEnd().endsWith('{') || line.trimEnd().endsWith('=>')) {
+      return lines.slice(0, i + 1).join('\n')
+    }
+  }
+  // No brace found in the first 3 lines — take the first 2 as the
+  // best-effort signature, or the whole snippet if it's shorter.
+  return lines.slice(0, Math.min(2, lines.length)).join('\n')
 }
 
 function summarizeAll<T extends ContextPackNode>(
@@ -93,7 +141,7 @@ function mixedResolution<T extends ContextPackNode>(
 
   let bytesSaved = 0
   const out: T[] = []
-  const resolutionMap: Array<{ node_id: string | undefined; resolution: 'detail' | 'summary' }> = []
+  const resolutionMap: Array<{ node_id: string | undefined; resolution: 'detail' | 'summary' | 'signature' }> = []
   nodes.forEach((node, idx) => {
     if (detailIndices.has(idx)) {
       out.push(node)
