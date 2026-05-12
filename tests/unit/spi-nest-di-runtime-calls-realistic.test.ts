@@ -314,6 +314,7 @@ describe('SPI realistic Nest DI runtime-call fixture', () => {
     const labels = result.matched_nodes.map((node) => node.label)
     const sourceFiles = result.matched_nodes.map((node) => normalizePathForAssertion(node.source_file))
     const frontendLabels = ['ReportFooter', 'pickGeneratedAt', 'pickPipelineLabel']
+    const diagnostics = computeContextPackDiagnostics(contextPackFromRetrieveResult(result))
 
     expect(result.retrieval_gate?.signals.generation_intent).toBe('runtime_generation')
     expect(result.retrieval_gate?.signals.target_domain_hint).toBe('backend_runtime')
@@ -321,8 +322,37 @@ describe('SPI realistic Nest DI runtime-call fixture', () => {
       expect.arrayContaining([
         '.generateFromProblem()',
         '.createIdea()',
+        '.generateTitle()',
+        '.updateTitle()',
+        '.startPipeline()',
+        '.claimQueuedPipelineRun()',
+        '.cancelPipeline()',
+        '.addJob()',
       ]),
     )
+    expect(labels).toEqual(expect.arrayContaining(['.process()']))
+    expect(labels).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^\.(search|score|save)\(\)$/),
+    ]))
+    expect(labels).not.toEqual(expect.arrayContaining([
+      '.generateBuildPerspective()',
+      '.exportIdeaToPdf()',
+      '.generateLetsBuild()',
+      '.getBuildPerspective()',
+      '.deleteIdea()',
+      '.getIdea()',
+      '.listIdeas()',
+      '.publishIdea()',
+      '.retryPipeline()',
+      '.createShare()',
+      '.signNDA()',
+      '.validateShareAccess()',
+      'migrateIdea()',
+      'main()',
+    ]))
+    expect(labels.filter((label) => ['.callLlm()', '.resolve()'].includes(label)).length).toBeLessThanOrEqual(1)
+    expect(result.token_count).toBeLessThan(2500)
+    expect(diagnostics.warnings.map((warning) => warning.kind)).not.toContain('runtime_pack_overexpanded')
     expect(sourceFiles.some((sourceFile) => sourceFile.includes('src/modules/ideas/'))).toBe(true)
     expect(labels.filter((label) => frontendLabels.includes(label))).toHaveLength(0)
     expect(sourceFiles.some((sourceFile) => sourceFile.includes('platform/src/features/idea-detail/components/ReportFooter.tsx'))).toBe(false)

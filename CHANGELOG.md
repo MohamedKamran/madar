@@ -4,6 +4,12 @@ All notable changes to the TypeScript package will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Broad runtime-generation packs are more compact**: slice-v1 now follows forward runtime `calls` paths for broad backend generation prompts while preserving bounded controller/provider context, suppressing shared-hub fan-out, sibling route families, and script/migration noise.
+- **Runtime over-expansion diagnostics**: context-pack diagnostics can now flag runtime-generation packs that fill the budget with sibling routes, hubs, or script/migration nodes after the core runtime path is already covered.
+- **Noisy NestJS regression coverage**: the realistic SPI fixture now includes sibling controllers, shared auth/LLM hubs, queue registration, and migration scripts to prove report-generation retrieval stays under budget without losing the backend runtime path.
+
 ## [0.22.5] - 2026-05-12
 
 ### Changed
