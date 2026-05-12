@@ -1,4 +1,4 @@
-import { resolve as pathResolve } from 'node:path'
+import { relative as pathRelative, resolve as pathResolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -25,9 +25,15 @@ const FIXTURE_ROOT = pathResolve(
   __dirname,
   '../fixtures/spi/nest-di-runtime-calls-realistic',
 )
+const WINDOWS_FIXTURE_ROOT = 'C:\\repo\\nest-di-runtime-calls-realistic'
 
 function normalizePathForAssertion(value: string): string {
   return value.replaceAll('\\', '/')
+}
+
+function toWindowsFixturePath(sourceFile: string): string {
+  const relativePath = pathRelative(FIXTURE_ROOT, sourceFile).replaceAll('/', '\\')
+  return `${WINDOWS_FIXTURE_ROOT}\\${relativePath}`
 }
 
 function buildFixtureSpi(): SemanticProgramIndex {
@@ -43,9 +49,24 @@ function buildFixtureExtraction(): ExtractionData {
   return projectSpiToExtraction(buildFixtureSpi(), { root: FIXTURE_ROOT })
 }
 
-function buildFixtureGraph(): KnowledgeGraph {
+function buildFixtureGraph(options: { windowsSourcePaths?: boolean } = {}): KnowledgeGraph {
   const extraction = buildFixtureExtraction()
-  return buildFromJson({ ...extraction, root_path: FIXTURE_ROOT }, { directed: true })
+  if (!options.windowsSourcePaths) {
+    return buildFromJson({ ...extraction, root_path: FIXTURE_ROOT }, { directed: true })
+  }
+
+  return buildFromJson({
+    ...extraction,
+    root_path: WINDOWS_FIXTURE_ROOT,
+    nodes: extraction.nodes.map((node) => ({
+      ...node,
+      source_file: toWindowsFixturePath(node.source_file),
+    })),
+    edges: extraction.edges.map((edge) => ({
+      ...edge,
+      source_file: edge.source_file ? toWindowsFixturePath(edge.source_file) : undefined,
+    })),
+  }, { directed: true })
 }
 
 function findSymbol(
@@ -304,7 +325,7 @@ describe('SPI realistic Nest DI runtime-call fixture', () => {
   })
 
   it('routes broad report-generation prompts to backend runtime nodes instead of frontend display helpers', () => {
-    const result = retrieveContext(buildFixtureGraph(), {
+    const result = retrieveContext(buildFixtureGraph({ windowsSourcePaths: true }), {
       question: 'Explain how idea report is getting generated',
       budget: 4000,
       retrievalLevel: 4,

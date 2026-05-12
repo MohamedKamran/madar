@@ -220,7 +220,7 @@ function effectivePolicy(
 }
 
 function isBarrelLike(label: string, sourceFile: string): boolean {
-  return label.trim().toLowerCase() === 'index.ts' || /(?:^|\/)index\.ts$/i.test(sourceFile)
+  return label.trim().toLowerCase() === 'index.ts' || /(?:^|\/)index\.ts$/i.test(sourceFile.replace(/\\/g, '/'))
 }
 
 function broadRuntimeGenerationPrompt(options: SliceOptions): boolean {
@@ -235,12 +235,13 @@ function promptAllowsScriptMigration(options: SliceOptions): boolean {
 }
 
 function scriptMigrationLikeNode(node: SliceScoredNode): boolean {
-  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(node.sourceFile)
+  const normalizedSourceFile = node.sourceFile.replace(/\\/g, '/')
+  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(normalizedSourceFile)
     || /\b(?:migrate|migration|backfill|seed)\b/i.test(node.label)
 }
 
 function routeOrControllerLikeNode(node: SliceScoredNode): boolean {
-  const lower = `${node.label} ${node.nodeKind ?? ''} ${node.frameworkRole ?? ''} ${node.sourceFile}`.toLowerCase()
+  const lower = `${node.label} ${node.nodeKind ?? ''} ${node.frameworkRole ?? ''} ${node.sourceFile.replace(/\\/g, '/')}`.toLowerCase()
   return /\b(?:route|controller|nest_route|nest_controller)\b/.test(lower)
     || /(?:^|\/)(?:controllers?|interface\/http)(?:\/|$)/.test(lower)
 }

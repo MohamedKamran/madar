@@ -173,7 +173,7 @@ export function tokenizeQuestion(question: string): string[] {
   return question
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
-    .split(/[\s_\-./,:;!?'"()[\]{}]+/)
+    .split(/[\s_\\\-./,:;!?'"()[\]{}]+/)
     .filter((token) => token.length > 1 && !STOP_WORDS.has(token))
 }
 
@@ -181,7 +181,7 @@ export function tokenizeLabel(label: string): string[] {
   return label
     .replace(/([a-z])([A-Z])/g, '$1 $2')
     .toLowerCase()
-    .split(/[\s_\-./,:;!?'"()[\]{}]+/)
+    .split(/[\s_\\\-./,:;!?'"()[\]{}]+/)
     .filter((token) => token.length > 1)
 }
 
@@ -840,7 +840,11 @@ function sourceFileMatchesMentionedPath(sourceFile: string, mentionedPaths: read
     return false
   }
 
-  return mentionedPaths.some((path) => sourceFile === path || sourceFile.endsWith(`/${path}`))
+  const normalizedSourceFile = sourceFile.replace(/\\/g, '/')
+  return mentionedPaths.some((path) => {
+    const normalizedPath = path.replace(/\\/g, '/')
+    return normalizedSourceFile === normalizedPath || normalizedSourceFile.endsWith(`/${normalizedPath}`)
+  })
 }
 
 function exclusionTokens(value: string): Set<string> {
@@ -1073,7 +1077,8 @@ function scriptMigrationPathPenalty(
     return 0
   }
 
-  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(sourceFile)
+  const normalizedSourceFile = sourceFile.replace(/\\/g, '/')
+  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(normalizedSourceFile)
     || /\b(?:migrate|migration|backfill|seed)\b/i.test(label)
     ? 6
     : 0

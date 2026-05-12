@@ -714,7 +714,8 @@ function looksArtifact(sourceFile: string): boolean {
 }
 
 function looksScriptMigration(sourceFile: string, label: string): boolean {
-  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(sourceFile)
+  const normalizedSourceFile = sourceFile.replace(/\\/g, '/')
+  return /(?:^|\/)(?:scripts?|migrations?|seeds?|backfills?)(?:\/|$)|\b(?:migrate|migration|backfill|seed)\b/i.test(normalizedSourceFile)
     || /\b(?:migrate|migration|backfill|seed)\b/i.test(label)
 }
 
