@@ -773,6 +773,21 @@ describe('cli main', () => {
     expect(shortFlag.logs).toEqual([expectedVersion])
   })
 
+  it('returns a controlled error when resolving the installed version fails', async () => {
+    const { io, logs, errors } = createIo()
+    const dependencies = createDependencies() as CliDependencies & { readInstalledVersion: () => string }
+
+    dependencies.readInstalledVersion = () => {
+      throw new Error('missing package metadata')
+    }
+
+    const exitCode = await executeCli(['--version'], io, dependencies)
+
+    expect(exitCode).toBe(1)
+    expect(logs).toEqual([])
+    expect(errors).toEqual(['error: missing package metadata'])
+  })
+
   it('prints an available update notice before normal command output', async () => {
     const { io, logs, errors } = createIo()
     const dependencies = createDependencies() as CliDependencies & { notifyUpdate: () => Promise<string | null> }

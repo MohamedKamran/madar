@@ -143,6 +143,7 @@ export interface CliDependencies {
   agentsInstall: typeof agentsInstall
   agentsUninstall: typeof agentsUninstall
   notifyUpdate?: () => Promise<string | null> | string | null
+  readInstalledVersion?: () => string
 }
 
 const COMPARE_WARNING_MESSAGE = 'compare will execute a baseline prompt and a graphify prompt for each question. This may consume paid model tokens.'
@@ -238,6 +239,7 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
     packageName: '@mohammednagy/graphify-ts',
     currentVersion: readPackageVersion(findPackageRoot()),
   }),
+  readInstalledVersion: () => readPackageVersion(findPackageRoot()),
 }
 
 function messageFromError(error: unknown): string {
@@ -525,28 +527,29 @@ function handleAgentCommand(command: AgentPlatform, args: string[], io: CliIO, d
 export async function executeCli(argv: string[], io: CliIO = console, dependencies: CliDependencies = DEFAULT_DEPENDENCIES): Promise<number> {
   const [command, ...args] = argv
 
-  if (command === '-v' || command === '--version') {
-    io.log(readPackageVersion(findPackageRoot()))
-    return 0
-  }
-
   if (!command || command === '-h' || command === '--help') {
     io.log(formatHelp())
     return 0
   }
 
-  if (!args.includes('--json') && dependencies.notifyUpdate) {
-    try {
-      const updateNotice = await dependencies.notifyUpdate()
-      if (updateNotice) {
-        io.log(updateNotice)
-      }
-    } catch {
-      // Update checks are best-effort and must never block the CLI command itself.
-    }
-  }
-
   try {
+    if (command === '-v' || command === '--version') {
+      const readInstalledVersion = dependencies.readInstalledVersion ?? (() => readPackageVersion(findPackageRoot()))
+      io.log(readInstalledVersion())
+      return 0
+    }
+
+    if (!args.includes('--json') && dependencies.notifyUpdate) {
+      try {
+        const updateNotice = await dependencies.notifyUpdate()
+        if (updateNotice) {
+          io.log(updateNotice)
+        }
+      } catch {
+        // Update checks are best-effort and must never block the CLI command itself.
+      }
+    }
+
     if (command === 'compare') {
       const options = parseCompareArgs(args)
       const confirm = async (message: string) => await dependencies.confirm(message)
