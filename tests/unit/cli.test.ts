@@ -773,6 +773,41 @@ describe('cli main', () => {
     expect(shortFlag.logs).toEqual([expectedVersion])
   })
 
+  it('prints an available update notice before normal command output', async () => {
+    const { io, logs, errors } = createIo()
+    const dependencies = createDependencies() as CliDependencies & { notifyUpdate: () => Promise<string | null> }
+
+    dependencies.notifyUpdate = async () => 'A newer graphify-ts is available: 0.22.8 -> 0.22.9'
+
+    const exitCode = await executeCli(['query', 'how does auth work'], io, dependencies)
+
+    expect(exitCode).toBe(0)
+    expect(errors).toEqual([])
+    expect(logs[0]).toBe('A newer graphify-ts is available: 0.22.8 -> 0.22.9')
+    expect(logs[1]).toBe('how does auth work :: bfs :: 2000')
+  })
+
+  it('skips the update notifier for help, version, and --json output', async () => {
+    const help = createIo()
+    const version = createIo()
+    const json = createIo()
+    const dependencies = createDependencies() as CliDependencies & { notifyUpdate: () => Promise<string | null> }
+    let notifyCalls = 0
+
+    dependencies.notifyUpdate = async () => {
+      notifyCalls += 1
+      return 'A newer graphify-ts is available: 0.22.8 -> 0.22.9'
+    }
+
+    await expect(executeCli(['--help'], help.io, dependencies)).resolves.toBe(0)
+    await expect(executeCli(['--version'], version.io, dependencies)).resolves.toBe(0)
+    await expect(executeCli(['time-travel', 'HEAD~1', 'HEAD', '--json'], json.io, dependencies)).resolves.toBe(0)
+
+    expect(notifyCalls).toBe(0)
+    expect(help.logs[0]).toContain('Usage: graphify-ts <command>')
+    expect(version.logs).toEqual([loadPackageVersion()])
+  })
+
   it('formats help text with supported commands', () => {
     const help = formatHelp()
     expect(help).toContain('--help')

@@ -37,6 +37,7 @@ import { serveGraphStdio } from '../runtime/stdio-server.js'
 import { getNeighbors, getNode, loadGraph, queryGraph, shortestPath } from '../runtime/serve.js'
 import { formatTimeTravelResult } from '../runtime/time-travel.js'
 import { findPackageRoot, readPackageVersion } from '../shared/package-metadata.js'
+import { getUpdateNotification } from '../shared/update-notifier.js'
 import {
   parseBenchmarkArgs,
   parseAddArgs,
@@ -141,6 +142,7 @@ export interface CliDependencies {
   claudeUninstall: typeof claudeUninstall
   agentsInstall: typeof agentsInstall
   agentsUninstall: typeof agentsUninstall
+  notifyUpdate?: () => Promise<string | null> | string | null
 }
 
 const COMPARE_WARNING_MESSAGE = 'compare will execute a baseline prompt and a graphify prompt for each question. This may consume paid model tokens.'
@@ -232,6 +234,10 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
   claudeUninstall,
   agentsInstall,
   agentsUninstall,
+  notifyUpdate: async () => await getUpdateNotification({
+    packageName: '@mohammednagy/graphify-ts',
+    currentVersion: readPackageVersion(findPackageRoot()),
+  }),
 }
 
 function messageFromError(error: unknown): string {
@@ -527,6 +533,17 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
   if (!command || command === '-h' || command === '--help') {
     io.log(formatHelp())
     return 0
+  }
+
+  if (!args.includes('--json') && dependencies.notifyUpdate) {
+    try {
+      const updateNotice = await dependencies.notifyUpdate()
+      if (updateNotice) {
+        io.log(updateNotice)
+      }
+    } catch {
+      // Update checks are best-effort and must never block the CLI command itself.
+    }
   }
 
   try {
