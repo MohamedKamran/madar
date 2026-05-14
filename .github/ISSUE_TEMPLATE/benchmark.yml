@@ -25,7 +25,7 @@ body:
       label: Setup
       description: Repo or fixture, graphify-ts version, Node.js version, OS, and relevant flags.
       placeholder: |
-        graphify-ts 0.22.8
+        graphify-ts <version>
         Node.js 20.x
         macOS 15
         Fixture: examples/demo-repo
