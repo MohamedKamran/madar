@@ -124,6 +124,8 @@ These are local installers that write the agent's own MCP config to point at the
 
 Codex is intentionally context-pack-first: run `graphify-ts generate .`, install with `graphify-ts codex install`, and start broad codebase work with `graphify-ts pack "<task>" --task explain` before raw file search. To remove the profile, run `graphify-ts codex uninstall`; it removes the graphify-ts AGENTS.md section and Codex hook while preserving unrelated content. Manual verification does not require Codex to be installed: inspect `AGENTS.md` and `.codex/hooks.json` after install, then confirm uninstall removes only graphify-ts content.
 
+For practical multi-agent workflows across Claude Code, Codex, Copilot, Cursor, and Gemini, see the [agent orchestration guide](docs/integrations/agent-orchestration.md).
+
 ---
 
 ## MCP tools
