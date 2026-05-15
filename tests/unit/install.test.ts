@@ -624,6 +624,15 @@ describe('install helpers', () => {
                   matcher: 'Read',
                   hooks: [{ type: 'command', command: 'echo keep-me' }],
                 },
+                {
+                  matcher: 'Bash',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: `node -e "require('fs').appendFileSync('graphify-out/custom.log','custom')"`,
+                    },
+                  ],
+                },
               ],
             },
           },
@@ -639,6 +648,7 @@ describe('install helpers', () => {
 
       expect(installMessage).toContain('.codex/hooks.json -> hook updated')
       expect(codexHooks).toContain('keep-me')
+      expect(codexHooks).toContain('custom.log')
       expect(decodedHookPayload).toContain('context-pack-first')
       expect(decodedHookPayload).toContain('graphify-ts pack')
       expect(decodedHookPayload).not.toContain('Legacy graphify-out retrieve-first guidance')

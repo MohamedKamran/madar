@@ -112,6 +112,46 @@ function hookCommandWithFallback(matchJson: string, missJson: string): string {
   return `node -e "var f;try{require('fs').accessSync('graphify-out/graph.json');f='${b64Match}'}catch(e){f='${b64Miss}'}process.stdout.write(Buffer.from(f,'base64').toString())"`
 }
 
+function decodeGeneratedHookPayloads(command: string): string[] {
+  return [...command.matchAll(/Buffer\.from\('([A-Za-z0-9+/=]{40,})','base64'\)/g)]
+    .map((match) => match[1])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => Buffer.from(value, 'base64').toString('utf8'))
+}
+
+function isGraphifyCodexHookPayload(payload: string): boolean {
+  const hasCodexOutputShape = payload.includes('"systemMessage"') || payload.includes('"hookSpecificOutput"')
+  const hasGraphifyGuidance =
+    payload.includes('graphify-ts') ||
+    payload.includes('context-pack-first') ||
+    payload.includes('retrieve-first') ||
+    payload.includes('knowledge graph')
+
+  return hasCodexOutputShape && hasGraphifyGuidance
+}
+
+function isGraphifyCodexHookCommand(command: string): boolean {
+  return (
+    command.includes("accessSync('graphify-out/graph.json')") &&
+    command.includes('process.stdout.write(Buffer.from(') &&
+    decodeGeneratedHookPayloads(command).some(isGraphifyCodexHookPayload)
+  )
+}
+
+function isGraphifyCodexHook(hook: unknown): boolean {
+  if (!isRecord(hook) || hook.matcher !== 'Bash' || !Array.isArray(hook.hooks)) {
+    return false
+  }
+
+  return hook.hooks.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === 'command' &&
+      typeof entry.command === 'string' &&
+      isGraphifyCodexHookCommand(entry.command),
+  )
+}
+
 const MCP_ROUTING_GUIDANCE =
   'Use the graph tool that matches the question: retrieve for direct codebase questions, relevant_files for where to open first, feature_map for the main areas and entry points, risk_map before editing, implementation_checklist for edit order and validation, and impact for blast radius.'
 
@@ -1364,9 +1404,22 @@ function installCodexHook(projectDir: string): string {
   const preToolUse = ensureArray(hooks, 'PreToolUse')
 
   const additions = CODEX_HOOK.hooks.PreToolUse as unknown[]
-  const filtered = preToolUse.filter((hook) => !JSON.stringify(hook).includes('graphify-out'))
-  if (filtered.length !== preToolUse.length) {
-    hooks.PreToolUse = [...filtered, ...additions]
+  let replaced = false
+  const updatedPreToolUse = preToolUse.flatMap((hook) => {
+    if (!isGraphifyCodexHook(hook)) {
+      return [hook]
+    }
+
+    if (replaced) {
+      return []
+    }
+
+    replaced = true
+    return additions
+  })
+
+  if (replaced) {
+    hooks.PreToolUse = updatedPreToolUse
     writeJson(hooksPath, hooksConfig)
     return '.codex/hooks.json -> hook updated'
   }
@@ -1385,7 +1438,7 @@ function uninstallCodexHook(projectDir: string): string | undefined {
   const hooksConfig = readJsonObject(hooksPath)
   const hooks = ensureRecord(hooksConfig, 'hooks')
   const preToolUse = ensureArray(hooks, 'PreToolUse')
-  const filtered = preToolUse.filter((hook) => !JSON.stringify(hook).includes('graphify-out'))
+  const filtered = preToolUse.filter((hook) => !isGraphifyCodexHook(hook))
 
   if (filtered.length === preToolUse.length) {
     return undefined
