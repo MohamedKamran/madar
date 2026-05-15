@@ -112,11 +112,54 @@ function hookCommandWithFallback(matchJson: string, missJson: string): string {
   return `node -e "var f;try{require('fs').accessSync('graphify-out/graph.json');f='${b64Match}'}catch(e){f='${b64Miss}'}process.stdout.write(Buffer.from(f,'base64').toString())"`
 }
 
+function decodeGeneratedHookPayloads(command: string): string[] {
+  return [...command.matchAll(/Buffer\.from\('([A-Za-z0-9+/=]{40,})','base64'\)/g)]
+    .map((match) => match[1])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => Buffer.from(value, 'base64').toString('utf8'))
+}
+
+function isGraphifyCodexHookPayload(payload: string): boolean {
+  const hasCodexOutputShape = payload.includes('"systemMessage"') || payload.includes('"hookSpecificOutput"')
+  const hasGraphifyGuidance =
+    payload.includes('graphify-ts') ||
+    payload.includes('context-pack-first') ||
+    payload.includes('retrieve-first') ||
+    payload.includes('knowledge graph')
+
+  return hasCodexOutputShape && hasGraphifyGuidance
+}
+
+function isGraphifyCodexHookCommand(command: string): boolean {
+  return (
+    command.includes("accessSync('graphify-out/graph.json')") &&
+    command.includes('process.stdout.write(Buffer.from(') &&
+    decodeGeneratedHookPayloads(command).some(isGraphifyCodexHookPayload)
+  )
+}
+
+function isGraphifyCodexHook(hook: unknown): boolean {
+  if (!isRecord(hook) || hook.matcher !== 'Bash' || !Array.isArray(hook.hooks)) {
+    return false
+  }
+
+  return hook.hooks.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === 'command' &&
+      typeof entry.command === 'string' &&
+      isGraphifyCodexHookCommand(entry.command),
+  )
+}
+
 const MCP_ROUTING_GUIDANCE =
   'Use the graph tool that matches the question: retrieve for direct codebase questions, relevant_files for where to open first, feature_map for the main areas and entry points, risk_map before editing, implementation_checklist for edit order and validation, and impact for blast radius.'
 
 const RETRIEVE_FIRST_MESSAGE =
   `STOP. This project has a graphify-ts knowledge graph. ${MCP_ROUTING_GUIDANCE} Graphify answers most codebase questions in 1 focused MCP call instead of 5–10 sequential file reads (3x fewer turns, ~2.8x faster on a real production codebase). Do not use Glob, Grep, Bash, Read, or Agent tools first. Only fall back to raw file tools if the graph tools cannot answer the question or the MCP server is unavailable.`
+
+const CODEX_CONTEXT_PACK_FIRST_MESSAGE =
+  `STOP. This project has a graphify-ts knowledge graph. Follow the Codex context-pack-first workflow: run graphify-ts pack "<task or question>" --task explain before broad Bash search, raw file reads, or spawning workers. Use --task review, --task debug, or --task impact when that better matches the work. If MCP graph tools are available, use retrieve, relevant_files, feature_map, risk_map, implementation_checklist, or impact to refine the pack. Only fall back to raw file tools when the context pack or graph tools are missing, stale, or insufficient; read graphify-out/GRAPH_REPORT.md before expanding manually.`
 
 const SETTINGS_HOOK = {
   // SECURITY: Keep this command static. Do not interpolate user-controlled input here.
@@ -151,7 +194,7 @@ const CODEX_HOOK = {
                   hookEventName: 'PreToolUse',
                   permissionDecision: 'allow',
                 },
-                systemMessage: RETRIEVE_FIRST_MESSAGE,
+                systemMessage: CODEX_CONTEXT_PACK_FIRST_MESSAGE,
               }),
             ),
           },
@@ -212,6 +255,36 @@ IMPORTANT: This project has a graphify-ts knowledge graph. You MUST follow these
    - \`impact\` for "what breaks if I change X?"
 2. **Do NOT search the codebase with other tools first** for codebase questions.
 3. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. In that case, read graphify-out/GRAPH_REPORT.md first.
+`
+
+const CODEX_AGENTS_MD_SECTION = `${SECTION_MARKER}
+
+### Codex CLI profile
+
+IMPORTANT: This project has a graphify-ts knowledge graph. Use a strict context-pack-first workflow:
+
+1. **Before broad code search, file reads, or worker dispatch**, compile a task-specific context pack:
+   - \`graphify-ts pack "<task or question>" --task explain\`
+   - use \`--task review\`, \`--task debug\`, or \`--task impact\` when that better matches the work
+2. If MCP graph tools are available, use the focused tool that matches the question after the pack:
+   - \`retrieve\` for direct codebase questions
+   - \`relevant_files\` for where to open first
+   - \`feature_map\` for involved areas and entry points
+   - \`risk_map\` before editing
+   - \`implementation_checklist\` for edit order and validation checkpoints
+   - \`impact\` for blast radius
+3. **Only fall back to raw file tools** when the context pack or graph tools are missing, stale, or insufficient. In that case, read \`graphify-out/GRAPH_REPORT.md\` first.
+4. **Do not dispatch \`spawn_agent\` workers first** for codebase discovery. Let the context pack define likely entry files, risks, and missing context before parallel work.
+5. **Uninstall behavior:** run \`graphify-ts codex uninstall\` to remove this AGENTS.md section and the graphify-ts Codex hook from \`.codex/hooks.json\` while preserving unrelated content.
+
+Manual verification:
+
+\`\`\`bash
+graphify-ts generate .
+graphify-ts codex install
+test -f AGENTS.md && test -f .codex/hooks.json
+graphify-ts codex uninstall
+\`\`\`
 `
 
 const GEMINI_MD_SECTION = `${SECTION_MARKER}
@@ -1330,11 +1403,27 @@ function installCodexHook(projectDir: string): string {
   const hooks = ensureRecord(hooksConfig, 'hooks')
   const preToolUse = ensureArray(hooks, 'PreToolUse')
 
-  if (preToolUse.some((hook) => JSON.stringify(hook).includes('graphify-out'))) {
-    return '.codex/hooks.json -> hook already registered (no change)'
+  const additions = CODEX_HOOK.hooks.PreToolUse as unknown[]
+  let replaced = false
+  const updatedPreToolUse = preToolUse.flatMap((hook) => {
+    if (!isGraphifyCodexHook(hook)) {
+      return [hook]
+    }
+
+    if (replaced) {
+      return []
+    }
+
+    replaced = true
+    return additions
+  })
+
+  if (replaced) {
+    hooks.PreToolUse = updatedPreToolUse
+    writeJson(hooksPath, hooksConfig)
+    return '.codex/hooks.json -> hook updated'
   }
 
-  const additions = CODEX_HOOK.hooks.PreToolUse as unknown[]
   preToolUse.push(...additions)
   writeJson(hooksPath, hooksConfig)
   return '.codex/hooks.json -> PreToolUse hook registered'
@@ -1349,7 +1438,7 @@ function uninstallCodexHook(projectDir: string): string | undefined {
   const hooksConfig = readJsonObject(hooksPath)
   const hooks = ensureRecord(hooksConfig, 'hooks')
   const preToolUse = ensureArray(hooks, 'PreToolUse')
-  const filtered = preToolUse.filter((hook) => !JSON.stringify(hook).includes('graphify-out'))
+  const filtered = preToolUse.filter((hook) => !isGraphifyCodexHook(hook))
 
   if (filtered.length === preToolUse.length) {
     return undefined
@@ -1666,7 +1755,8 @@ export function agentsInstall(projectDir = '.', platform: AgentPlatform, options
   const resolvedProjectDir = resolve(projectDir)
   const packageRoot = options.packageRoot ? resolve(options.packageRoot) : undefined
   const displayName = formatPlatformDisplayName(platform)
-  const messages = [writeSection(join(resolvedProjectDir, 'AGENTS.md'), AGENTS_MD_SECTION)]
+  const agentsSection = platform === 'codex' ? CODEX_AGENTS_MD_SECTION : AGENTS_MD_SECTION
+  const messages = [writeSection(join(resolvedProjectDir, 'AGENTS.md'), agentsSection)]
 
   if (platform === 'codex') {
     messages.push(installCodexHook(resolvedProjectDir))
@@ -1675,7 +1765,11 @@ export function agentsInstall(projectDir = '.', platform: AgentPlatform, options
     messages.push(installOpencodeMcpServer(resolvedProjectDir, packageRoot))
   }
 
-  messages.push('', `${displayName} will now check the knowledge graph before answering`, 'codebase questions and rebuild it after code changes.')
+  if (platform === 'codex') {
+    messages.push('', 'Codex will now use the graphify-ts context-pack-first profile before broad codebase discovery.', 'Uninstall with: graphify-ts codex uninstall')
+  } else {
+    messages.push('', `${displayName} will now check the knowledge graph before answering`, 'codebase questions and rebuild it after code changes.')
+  }
   if (platform !== 'codex' && platform !== 'opencode') {
     messages.push('', `Note: unlike Claude Code, there is no PreToolUse hook equivalent for ${displayName} - the AGENTS.md rules are the always-on mechanism.`)
   }

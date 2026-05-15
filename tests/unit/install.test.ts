@@ -114,6 +114,14 @@ function readJsoncConfig(filePath: string): OpenCodeConfig {
   return parsed.config as OpenCodeConfig
 }
 
+function decodeHookPayloads(content: string): string {
+  return [...content.matchAll(/'([A-Za-z0-9+/=]{40,})'/g)]
+    .map((match) => match[1])
+    .filter((value): value is string => typeof value === 'string')
+    .map((b64) => Buffer.from(b64, 'base64').toString('utf8'))
+    .join('\n')
+}
+
 describe('install helpers', () => {
   it('chooses the default platform from the host OS', () => {
     expect(defaultInstallPlatform('win32')).toBe('windows')
@@ -567,6 +575,83 @@ describe('install helpers', () => {
           enabled: true,
         })
       })
+    })
+  })
+
+  it('writes Codex-specific context-pack-first guidance and uninstall behavior', () => {
+    withTempDir((projectDir) => {
+      const installMessage = agentsInstall(projectDir, 'codex')
+      const agentsMd = readFileSync(join(projectDir, 'AGENTS.md'), 'utf8')
+      const codexHooks = readFileSync(join(projectDir, '.codex', 'hooks.json'), 'utf8')
+      const decodedHookPayload = decodeHookPayloads(codexHooks)
+
+      expect(installMessage).toContain('Codex')
+      expect(installMessage).toContain('graphify-ts codex uninstall')
+      expect(agentsMd).toContain('Codex CLI profile')
+      expect(agentsMd).toContain('context-pack-first')
+      expect(agentsMd).toContain('graphify-ts pack')
+      expect(agentsMd).toContain('graphify-ts codex uninstall')
+      expect(agentsMd).toContain('Manual verification')
+      expect(decodedHookPayload).toContain('context-pack-first')
+      expect(decodedHookPayload).toContain('graphify-ts pack')
+    })
+  })
+
+  it('updates existing Codex graphify hooks during reinstall', () => {
+    withTempDir((projectDir) => {
+      const stalePayload = JSON.stringify({
+        systemMessage: 'Legacy graphify-out retrieve-first guidance',
+      })
+      const stalePayloadB64 = Buffer.from(stalePayload).toString('base64')
+
+      mkdirSync(join(projectDir, '.codex'), { recursive: true })
+      writeFileSync(
+        join(projectDir, '.codex', 'hooks.json'),
+        JSON.stringify(
+          {
+            hooks: {
+              PreToolUse: [
+                {
+                  matcher: 'Bash',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: `node -e "require('fs').accessSync('graphify-out/graph.json');process.stdout.write(Buffer.from('${stalePayloadB64}','base64').toString())"`,
+                    },
+                  ],
+                },
+                {
+                  matcher: 'Read',
+                  hooks: [{ type: 'command', command: 'echo keep-me' }],
+                },
+                {
+                  matcher: 'Bash',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: `node -e "require('fs').appendFileSync('graphify-out/custom.log','custom')"`,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      )
+
+      const installMessage = agentsInstall(projectDir, 'codex')
+      const codexHooks = readFileSync(join(projectDir, '.codex', 'hooks.json'), 'utf8')
+      const decodedHookPayload = decodeHookPayloads(codexHooks)
+
+      expect(installMessage).toContain('.codex/hooks.json -> hook updated')
+      expect(codexHooks).toContain('keep-me')
+      expect(codexHooks).toContain('custom.log')
+      expect(decodedHookPayload).toContain('context-pack-first')
+      expect(decodedHookPayload).toContain('graphify-ts pack')
+      expect(decodedHookPayload).not.toContain('Legacy graphify-out retrieve-first guidance')
     })
   })
 
