@@ -212,13 +212,22 @@ export async function getUpdateNotification(options: UpdateNotificationOptions):
   if (shouldRefresh) {
     const fetchText = options.fetchText ?? safeFetchText
     const latestUrl = `https://registry.npmjs.org/${encodeURIComponent(options.packageName)}/latest`
-    const latest = JSON.parse(await fetchText(latestUrl, undefined, REGISTRY_TIMEOUT_MS)) as { version?: unknown }
-    latestVersion = typeof latest.version === 'string' && latest.version.trim().length > 0 ? latest.version : null
-    checkedAt = currentTime
-    saveCache(cacheFile, {
-      checked_at: checkedAt,
-      latest_version: latestVersion,
-    })
+    try {
+      const latest = JSON.parse(await fetchText(latestUrl, undefined, REGISTRY_TIMEOUT_MS)) as { version?: unknown }
+      latestVersion = typeof latest.version === 'string' && latest.version.trim().length > 0 ? latest.version : null
+      checkedAt = currentTime
+      saveCache(cacheFile, {
+        checked_at: checkedAt,
+        latest_version: latestVersion,
+      })
+    } catch {
+      saveCache(cacheFile, {
+        checked_at: currentTime,
+        latest_version: cached?.latest_version ?? null,
+        ...(typeof cached?.notified_at === 'number' ? { notified_at: cached.notified_at } : {}),
+      })
+      return null
+    }
   }
 
   if (!latestVersion || compareVersions(latestVersion, options.currentVersion) <= 0) {
