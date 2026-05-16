@@ -108,6 +108,58 @@ describe('update notifier', () => {
     }
   })
 
+  it('writes a backoff cache entry when the registry refresh fails', async () => {
+    const cacheRoot = mkdtempSync(join(tmpdir(), 'graphify-update-notifier-'))
+    const cacheFile = join(cacheRoot, 'graphify-ts', 'update-check.json')
+    let fetchCalls = 0
+
+    try {
+      mkdirSync(join(cacheRoot, 'graphify-ts'), { recursive: true })
+      writeFileSync(cacheFile, JSON.stringify({
+        checked_at: 1_700_000_000_000,
+        latest_version: '0.22.9',
+        notified_at: 1_700_000_000_000,
+      }))
+
+      const notice = await getUpdateNotification({
+        packageName: '@mohammednagy/graphify-ts',
+        currentVersion: '0.22.8',
+        cacheRoot,
+        stdoutIsTTY: true,
+        env: {},
+        now: () => 1_700_000_000_000 + 2 * 24 * 60 * 60 * 1000,
+        fetchText: async () => {
+          fetchCalls += 1
+          throw new Error('offline')
+        },
+      })
+
+      const secondNotice = await getUpdateNotification({
+        packageName: '@mohammednagy/graphify-ts',
+        currentVersion: '0.22.8',
+        cacheRoot,
+        stdoutIsTTY: true,
+        env: {},
+        now: () => 1_700_000_000_000 + 2 * 24 * 60 * 60 * 1000 + 1_000,
+        fetchText: async () => {
+          fetchCalls += 1
+          return JSON.stringify({ version: '9.9.9' })
+        },
+      })
+
+      expect(notice).toBeNull()
+      expect(secondNotice).toBeNull()
+      expect(fetchCalls).toBe(1)
+      expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toEqual({
+        checked_at: 1_700_000_000_000 + 2 * 24 * 60 * 60 * 1000,
+        latest_version: '0.22.9',
+        notified_at: 1_700_000_000_000,
+      })
+    } finally {
+      rmSync(cacheRoot, { recursive: true, force: true })
+    }
+  })
+
   it('skips checks when disabled or non-interactive', async () => {
     const cacheRoot = mkdtempSync(join(tmpdir(), 'graphify-update-notifier-'))
     let fetchCalls = 0
