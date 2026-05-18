@@ -728,7 +728,6 @@ function extractGraphifyTrace(stdout: string): CompareGraphifyTrace | undefined 
 
   const toolCallsByName: Record<string, number> = {}
   const perTurnIndex = new Map<number, CompareGraphifyTraceTurnSummary>()
-  const turnOrder: number[] = []
   let fallbackTurn = 1
   let totalToolCalls = 0
 
@@ -771,21 +770,22 @@ function extractGraphifyTrace(stdout: string): CompareGraphifyTrace | undefined 
       tool_call_count: tools.length,
       tools,
     })
-    turnOrder.push(turn)
   }
 
   if (totalToolCalls === 0) {
     return undefined
   }
 
+  const sortedTurns = [...perTurnIndex.keys()].sort((leftTurn, rightTurn) => leftTurn - rightTurn)
+
   return {
     source: 'claude_messages_tool_use',
-    summary: `${totalToolCalls} tool calls across ${turnOrder.length} turns`,
+    summary: `${totalToolCalls} tool calls across ${sortedTurns.length} turns`,
     tool_call_count: totalToolCalls,
     tool_calls_by_name: Object.fromEntries(
       Object.entries(toolCallsByName).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
     ),
-    per_turn: turnOrder.map((turn) => perTurnIndex.get(turn)!),
+    per_turn: sortedTurns.map((turn) => perTurnIndex.get(turn)!),
   }
 }
 
