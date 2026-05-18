@@ -1848,9 +1848,14 @@ describe('compare runtime', () => {
   it('sanitizes share-safe compare stderr and evidence paths without changing the local report', async () => {
     const graph = makeGraph()
     writeProjectFiles()
+    const secretPath = join(PROJECT_FIXTURE_ROOT, 'src', 'secret.ts')
+    writeFileSync(secretPath, 'export const secret = true\n', 'utf8')
     const graphPath = writeGraphFixture(graph)
-    const overflowPath = resolve(PROJECT_FIXTURE_ROOT, '..', '..', '..', 'vault', 'private', 'overflow.log')
-    const execErrorPath = resolve(PROJECT_FIXTURE_ROOT, '..', '..', '..', 'vault', 'private', 'runner-error.log')
+    const outputTimestamp = '2026-04-24T19-30-00'
+    const questionOutputDir = join(COMPARE_OUTPUT_ROOT, outputTimestamp)
+    const overflowPath = relative(questionOutputDir, secretPath)
+    const execErrorTargetPath = resolve(PROJECT_FIXTURE_ROOT, '..', '..', '..', 'vault', 'private', 'runner-error.log')
+    const execErrorPath = relative(PROJECT_FIXTURE_ROOT, execErrorTargetPath)
 
     const result = await executeCompareRuns(
       {
@@ -1880,6 +1885,8 @@ describe('compare runtime', () => {
     const report = result.reports[0]!
     const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
     const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
+    const shareSafeEvidence = (shareSafeReport.evidence as Record<string, string | null>).baseline
+    const shareSafeStderr = (shareSafeReport.stderr as Record<string, string | null>).graphify
 
     expect(report.evidence.baseline).toContain(overflowPath)
     expect(report.stderr.graphify).toContain(execErrorPath)
@@ -1888,10 +1895,12 @@ describe('compare runtime', () => {
 
     expect(JSON.stringify(shareSafeReport)).not.toContain(overflowPath)
     expect(JSON.stringify(shareSafeReport)).not.toContain(execErrorPath)
+    expect(shareSafeEvidence).not.toMatch(/\.\.[\\/A-Za-z0-9_-]/)
+    expect(shareSafeStderr).not.toMatch(/\.\.[\\/A-Za-z0-9_-]/)
     expect(shareSafeReport).toEqual(
       expect.objectContaining({
         evidence: expect.objectContaining({
-          baseline: expect.stringContaining('overflow.log'),
+          baseline: expect.stringContaining('secret.ts'),
         }),
         stderr: expect.objectContaining({
           graphify: expect.stringContaining('runner-error.log'),

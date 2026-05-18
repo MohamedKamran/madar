@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 
 export interface ShareSafePathRoots {
@@ -10,6 +10,10 @@ const URL_TOKEN_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>]+/gi
 const PATH_SEGMENT_PATTERN = String.raw`[^\s"'<>\\/]+(?: [^\s"'<>\\/]+)*`
 const ABSOLUTE_PATH_TOKEN_PATTERN = new RegExp(
   String.raw`(?:[A-Za-z]:[\\/](?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?|\/(?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?)`,
+  'g',
+)
+const RELATIVE_TRAVERSAL_TOKEN_PATTERN = new RegExp(
+  String.raw`(?:\.\.[\\/]+)+(?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?`,
   'g',
 )
 const TRAILING_PATH_PUNCTUATION = new Set([',', '.', ':', ';', ')', ']', '}'])
@@ -113,6 +117,17 @@ export function toShareSafeArtifactPath(path: string, roots: ShareSafePathRoots)
   return externalPathFallback(path)
 }
 
+function sanitizeRelativeTraversalPath(path: string, roots: ShareSafePathRoots): string {
+  for (const candidate of [resolve(roots.projectRoot, path), resolve(roots.artifactRoot, path)]) {
+    if (!existsSync(candidate)) continue
+
+    const rewrittenPath = toShareSafeRootedPath(candidate, roots)
+    if (rewrittenPath !== null) return rewrittenPath
+  }
+
+  return externalPathFallback(path)
+}
+
 export function sanitizeShareSafeText(text: string, roots: ShareSafePathRoots): string {
   const urls: string[] = []
   const protectedText = text.replace(URL_TOKEN_PATTERN, (url) => {
@@ -121,7 +136,12 @@ export function sanitizeShareSafeText(text: string, roots: ShareSafePathRoots): 
     return placeholder
   })
 
-  const sanitizedText = protectedText.replace(ABSOLUTE_PATH_TOKEN_PATTERN, (token) => {
+  const traversalSanitizedText = protectedText.replace(RELATIVE_TRAVERSAL_TOKEN_PATTERN, (token) => {
+    const { path, suffix } = splitTrailingPathPunctuation(token)
+    return `${sanitizeRelativeTraversalPath(path, roots)}${suffix}`
+  })
+
+  const sanitizedText = traversalSanitizedText.replace(ABSOLUTE_PATH_TOKEN_PATTERN, (token) => {
     const { path, suffix } = splitTrailingPathPunctuation(token)
     const rewrittenPath = toShareSafeRootedPath(path, roots)
     return rewrittenPath === null ? `${externalPathFallback(path)}${suffix}` : `${rewrittenPath}${suffix}`
