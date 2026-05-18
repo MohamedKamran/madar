@@ -1854,8 +1854,7 @@ describe('compare runtime', () => {
     const outputTimestamp = '2026-04-24T19-30-00'
     const questionOutputDir = join(COMPARE_OUTPUT_ROOT, outputTimestamp)
     const overflowPath = relative(questionOutputDir, secretPath)
-    const execErrorTargetPath = resolve(PROJECT_FIXTURE_ROOT, '..', '..', '..', 'vault', 'private', 'runner-error.log')
-    const execErrorPath = relative(PROJECT_FIXTURE_ROOT, execErrorTargetPath)
+    const expectedShareSafeSecretPath = '<project-root>/src/secret.ts'
 
     const result = await executeCompareRuns(
       {
@@ -1871,13 +1870,13 @@ describe('compare runtime', () => {
           if (execution.mode === 'baseline') {
             return {
               exitCode: 1,
-              stdout: `Prompt is too long while loading ${overflowPath}\n`,
+              stdout: `Prompt is too long while loading ${overflowPath} for details\n`,
               stderr: '',
               elapsedMs: 3,
             }
           }
 
-          throw new Error(`Runner crashed while reading ${execErrorPath}`)
+          throw new Error(`Runner crashed while reading ${overflowPath} for details`)
         },
       },
     )
@@ -1888,22 +1887,22 @@ describe('compare runtime', () => {
     const shareSafeEvidence = (shareSafeReport.evidence as Record<string, string | null>).baseline
     const shareSafeStderr = (shareSafeReport.stderr as Record<string, string | null>).graphify
 
-    expect(report.evidence.baseline).toContain(overflowPath)
-    expect(report.stderr.graphify).toContain(execErrorPath)
-    expect(JSON.stringify(savedReport)).toContain(overflowPath)
-    expect(JSON.stringify(savedReport)).toContain(execErrorPath)
+    expect(report.evidence.baseline).toContain(`${overflowPath} for details`)
+    expect(report.stderr.graphify).toContain(`${overflowPath} for details`)
+    expect(JSON.stringify(savedReport)).toContain(`${overflowPath} for details`)
 
     expect(JSON.stringify(shareSafeReport)).not.toContain(overflowPath)
-    expect(JSON.stringify(shareSafeReport)).not.toContain(execErrorPath)
     expect(shareSafeEvidence).not.toMatch(/\.\.[\\/A-Za-z0-9_-]/)
     expect(shareSafeStderr).not.toMatch(/\.\.[\\/A-Za-z0-9_-]/)
+    expect(shareSafeEvidence).toContain(`${expectedShareSafeSecretPath} for details`)
+    expect(shareSafeStderr).toContain(`${expectedShareSafeSecretPath} for details`)
     expect(shareSafeReport).toEqual(
       expect.objectContaining({
         evidence: expect.objectContaining({
-          baseline: expect.stringContaining('secret.ts'),
+          baseline: expect.stringContaining(`${expectedShareSafeSecretPath} for details`),
         }),
         stderr: expect.objectContaining({
-          graphify: expect.stringContaining('runner-error.log'),
+          graphify: expect.stringContaining(`${expectedShareSafeSecretPath} for details`),
         }),
       }),
     )

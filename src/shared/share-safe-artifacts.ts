@@ -8,12 +8,13 @@ export interface ShareSafePathRoots {
 
 const URL_TOKEN_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'`<>]+/gi
 const PATH_SEGMENT_PATTERN = String.raw`[^\s"'<>\\/]+(?: [^\s"'<>\\/]+)*`
+const RELATIVE_TRAVERSAL_SEGMENT_PATTERN = String.raw`[^\s"'<>\\/]+`
 const ABSOLUTE_PATH_TOKEN_PATTERN = new RegExp(
-  String.raw`(?:[A-Za-z]:[\\/](?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?|\/(?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?)`,
+  String.raw`(?<!<artifact-root>)(?<!<project-root>)(?:[A-Za-z]:[\\/](?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?|\/(?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?)`,
   'g',
 )
 const RELATIVE_TRAVERSAL_TOKEN_PATTERN = new RegExp(
-  String.raw`(?:\.\.[\\/]+)+(?:${PATH_SEGMENT_PATTERN}(?:[\\/]+${PATH_SEGMENT_PATTERN})*)?`,
+  String.raw`(?:\.\.[\\/]+)+(?:${RELATIVE_TRAVERSAL_SEGMENT_PATTERN}(?:[\\/]+${RELATIVE_TRAVERSAL_SEGMENT_PATTERN})*)?`,
   'g',
 )
 const TRAILING_PATH_PUNCTUATION = new Set([',', '.', ':', ';', ')', ']', '}'])
@@ -111,6 +112,20 @@ function externalPathFallback(path: string): string {
   return lastSegment && lastSegment.length > 0 ? lastSegment : '<external-path>'
 }
 
+function isWithinShareSafeRootedToken(text: string, offset: number): boolean {
+  const boundary = Math.max(
+    text.lastIndexOf(' ', offset - 1),
+    text.lastIndexOf('\n', offset - 1),
+    text.lastIndexOf('\r', offset - 1),
+    text.lastIndexOf('\t', offset - 1),
+    text.lastIndexOf('"', offset - 1),
+    text.lastIndexOf("'", offset - 1),
+    text.lastIndexOf('`', offset - 1),
+  )
+  const tokenPrefix = text.slice(boundary + 1, offset)
+  return tokenPrefix.includes('<artifact-root>') || tokenPrefix.includes('<project-root>')
+}
+
 export function toShareSafeArtifactPath(path: string, roots: ShareSafePathRoots): string {
   const rewrittenPath = toShareSafeRootedPath(path, roots)
   if (rewrittenPath !== null) return rewrittenPath
@@ -141,7 +156,10 @@ export function sanitizeShareSafeText(text: string, roots: ShareSafePathRoots): 
     return `${sanitizeRelativeTraversalPath(path, roots)}${suffix}`
   })
 
-  const sanitizedText = traversalSanitizedText.replace(ABSOLUTE_PATH_TOKEN_PATTERN, (token) => {
+  const sanitizedText = traversalSanitizedText.replace(ABSOLUTE_PATH_TOKEN_PATTERN, (token, offset, source) => {
+    if (isWithinShareSafeRootedToken(source, offset)) {
+      return token
+    }
     const { path, suffix } = splitTrailingPathPunctuation(token)
     const rewrittenPath = toShareSafeRootedPath(path, roots)
     return rewrittenPath === null ? `${externalPathFallback(path)}${suffix}` : `${rewrittenPath}${suffix}`
