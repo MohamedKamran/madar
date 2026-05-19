@@ -1033,12 +1033,16 @@ export function renderCompiledContextPackNodes<
           node.line_number,
           node.snippet ?? null,
         )
-        const keepExplainDetail = taskContract.task_kind === 'explain'
-          && node.representation_type === 'signature'
-          && typeof originalNode.snippet === 'string'
+        const hasOriginalSnippet = typeof originalNode.snippet === 'string'
           && originalNode.snippet.length > 0
+        if (taskContract.task_kind === 'explain' && hasOriginalSnippet) {
+          return {
+            ...node,
+            snippet: originalNode.snippet,
+          } as TNode
+        }
 
-        return !keepExplainDetail && renderedCost <= originalCost ? node : originalNode
+        return renderedCost <= originalCost ? node : originalNode
       }) as TNode[]
 
   return {
