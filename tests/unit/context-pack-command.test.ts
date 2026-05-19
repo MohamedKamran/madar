@@ -1,11 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import type { ContextPackExecutionSlice } from '../../src/contracts/context-pack.js'
 import { KnowledgeGraph } from '../../src/contracts/graph.js'
 import { runContextPackCommand, type ContextPackCommandDependencies } from '../../src/infrastructure/context-pack-command.js'
 
 describe('context-pack-command', () => {
   it('emits a compact deterministic explain pack', async () => {
     const graph = new KnowledgeGraph()
+    const executionSlice: ContextPackExecutionSlice = {
+      status: 'complete',
+      steps: [
+        { label: 'POST /login' },
+        { label: 'AuthController.login' },
+        { label: 'AuthService.login' },
+        { label: 'SessionStore.createSession' },
+      ],
+    }
     const dependencies: ContextPackCommandDependencies = {
       loadGraph: vi.fn().mockReturnValue(graph),
       retrieveContext: vi.fn().mockReturnValue({
@@ -104,6 +114,7 @@ describe('context-pack-command', () => {
         community_context: [],
         graph_signals: { god_nodes: [], bridge_nodes: [] },
         shared_file_type: 'code',
+        execution_slice: executionSlice,
       }),
       analyzePrImpact: vi.fn(),
       compactPrImpactResult: vi.fn(),
@@ -177,8 +188,10 @@ describe('context-pack-command', () => {
         community_context: [],
         graph_signals: { god_nodes: [], bridge_nodes: [] },
         shared_file_type: 'code',
+        execution_slice: executionSlice,
       },
     }))
+    expect((payload.pack as { execution_slice?: ContextPackExecutionSlice }).execution_slice).toEqual(executionSlice)
   })
 
   it('normalizes sub-minimum explain budgets before retrieving', async () => {
