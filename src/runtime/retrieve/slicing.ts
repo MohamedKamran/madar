@@ -128,6 +128,14 @@ function promptWantsRuntimePipeline(prompt: string | undefined): boolean {
   return /\b(runtime|pipeline|service|orchestrator|job|agent|scoring|report(?: builder)?|persistence|repository|generat(?:e|ed|es|ing|ion)|create|created)\b/i.test(prompt)
 }
 
+function promptMentionsHttpRoute(prompt: string | undefined): boolean {
+  if (!prompt) {
+    return false
+  }
+
+  return /\b(?:get|post|put|patch|delete|head|options)\b\s+\/[^\s`'")]+/i.test(prompt)
+}
+
 function methodLikeNode(node: SliceScoredNode): boolean {
   return node.nodeKind?.toLowerCase() === 'method' || /(?:[.#:]|^\.)[A-Za-z_$][\w$]*\(?\)?$/u.test(node.label)
 }
@@ -247,6 +255,12 @@ function routeOrControllerLikeNode(node: SliceScoredNode): boolean {
     || /(?:^|\/)(?:controllers?|interface\/http)(?:\/|$)/.test(lower)
 }
 
+function routeLikeNode(node: SliceScoredNode): boolean {
+  const lower = `${node.label} ${node.nodeKind ?? ''} ${node.frameworkRole ?? ''}`.toLowerCase()
+  return /\b(?:route|nest_route|express_route|route_handler)\b/.test(lower)
+    || /^(?:get|post|put|patch|delete|head|options)\s+\//i.test(node.label)
+}
+
 function frontendDisplayLikeNode(node: SliceScoredNode): boolean {
   const lower = `${node.label} ${node.nodeKind ?? ''} ${node.frameworkRole ?? ''} ${node.sourceFile}`.toLowerCase()
   return /\.(?:tsx|jsx)\b/.test(lower)
@@ -338,6 +352,19 @@ function buildAnchors(scored: readonly SliceScoredNode[], options: SliceOptions)
   const exactMethodAnchors = matchedAnchors.filter((node) => node.exactLabelMatch && methodLikeNode(node))
   const nonBarrelMatchedAnchors = matchedAnchors.filter((node) => !isBarrelLike(node.label, node.sourceFile))
   const broadRuntimeGeneration = broadRuntimeGenerationPrompt(options)
+  const routePromptAnchors = broadRuntimeGeneration && promptMentionsHttpRoute(options.prompt)
+    ? scored
+      .filter((node) => routeOrControllerLikeNode(node) && !isBarrelLike(node.label, node.sourceFile) && !frontendDisplayLikeNode(node))
+      .sort((left, right) => {
+        const leftPriority = (routeLikeNode(left) ? 4 : 0)
+          + (left.exactLabelMatch || left.literalPathMatch ? 2 : 0)
+          + (left.sourcePathMatch ? 1 : 0)
+        const rightPriority = (routeLikeNode(right) ? 4 : 0)
+          + (right.exactLabelMatch || right.literalPathMatch ? 2 : 0)
+          + (right.sourcePathMatch ? 1 : 0)
+        return rightPriority - leftPriority || right.score - left.score
+      })
+    : []
   const intentAnchors = (() => {
     if (options.generationIntent === 'runtime_generation' && options.targetDomainHint === 'backend_runtime') {
       return matchedAnchors
@@ -361,6 +388,8 @@ function buildAnchors(scored: readonly SliceScoredNode[], options: SliceOptions)
   })()
   const anchorPool = exactMethodAnchors.length > 0
     ? exactMethodAnchors.slice(0, 1)
+    : routePromptAnchors.length > 0
+    ? routePromptAnchors.slice(0, 1)
     : intentAnchors.length > 0
     ? intentAnchors.slice(0, broadRuntimeGeneration ? 1 : 2)
     : matchedAnchors.length > 0
