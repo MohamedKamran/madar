@@ -11,7 +11,9 @@ const REVIEW_ARTIFACT_DIR = resolve('docs', 'benchmarks', '2026-05-02-govalidate
 const REPORT_GENERATION_ARTIFACT_DIR = resolve('docs', 'benchmarks', '2026-05-12-govalidate-report-generation')
 const BENCHMARK_STYLESHEET = resolve('docs', 'benchmarks', 'styles.css')
 const PACK_VERIFIER_PATH = resolve('docs', 'benchmarks', 'govalidate-suite', 'verify-pack-quality.js')
+const ANSWER_VERIFIER_PATH = resolve('docs', 'benchmarks', 'govalidate-suite', 'verify-answer-quality.js')
 const PACK_GATE_CONFIG_PATH = resolve('docs', 'benchmarks', 'govalidate-suite', 'quality-gates.json')
+const SUITE_README_PATH = resolve('docs', 'benchmarks', 'govalidate-suite', 'README.md')
 
 interface PackQualityGateDefinition {
   prompt: string
@@ -20,6 +22,11 @@ interface PackQualityGateDefinition {
   max_pack_tokens: number
   max_matched_nodes: number
   max_relationships: number
+  required_answer_terms: string[]
+  forbidden_answer_terms: string[]
+  required_concepts: string[]
+  answer_quality_notes: string[]
+  manual_review_notes: string[]
 }
 
 const DOCS_ARTIFACT_GATE: PackQualityGateDefinition = {
@@ -29,6 +36,11 @@ const DOCS_ARTIFACT_GATE: PackQualityGateDefinition = {
   max_pack_tokens: 1_456,
   max_matched_nodes: 38,
   max_relationships: 57,
+  required_answer_terms: ['idea report', 'GenerateIdeaReportService'],
+  forbidden_answer_terms: ['IdeaReportSharePage'],
+  required_concepts: ['runtime path stays on controller -> service flow'],
+  answer_quality_notes: ['Deterministic answer checks are necessary but not sufficient for benchmark claims.'],
+  manual_review_notes: ['Confirm the answer explains how the report is generated, not just where files exist.'],
 }
 
 function buildMatchedNodes(totalCount: number, labels: readonly string[]): CompareReportPack['matched_nodes'] {
@@ -146,6 +158,40 @@ function runPackVerifier(
     return spawnSync(
       process.execPath,
       [PACK_VERIFIER_PATH, '--gate', 'docs-artifact', '--config', configArg, '--report', reportArg],
+      { encoding: 'utf8' },
+    )
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true })
+  }
+}
+
+function runAnswerVerifier(
+  testName: string,
+  answerText: string,
+  options: {
+    gateConfig?: Record<string, unknown>
+    relativeConfigPath?: boolean
+    relativeAnswerPath?: boolean
+  } = {},
+): ReturnType<typeof spawnSync> {
+  const fixtureRoot = join(
+    process.cwd(),
+    'graphify-out',
+    'benchmark-artifact-answer-quality',
+    `${testName}-${process.pid}-${Date.now()}`,
+  )
+  const answerPath = join(fixtureRoot, 'graphify-answer.txt')
+  const configPath = join(fixtureRoot, 'quality-gates.json')
+  const answerArg = options.relativeAnswerPath ? relative(process.cwd(), answerPath) : answerPath
+  const configArg = options.relativeConfigPath ? relative(process.cwd(), configPath) : configPath
+  mkdirSync(fixtureRoot, { recursive: true })
+  writeFileSync(answerPath, answerText, 'utf8')
+  writeFileSync(configPath, `${JSON.stringify(options.gateConfig ?? { 'docs-artifact': DOCS_ARTIFACT_GATE }, null, 2)}\n`, 'utf8')
+
+  try {
+    return spawnSync(
+      process.execPath,
+      [ANSWER_VERIFIER_PATH, '--gate', 'docs-artifact', '--config', configArg, '--answer', answerArg],
       { encoding: 'utf8' },
     )
   } finally {
@@ -297,6 +343,7 @@ describe('public benchmark artifact (2026-05-12 govalidate report generation)', 
 
   it('README points readers to the shared suite verifier and gate config', () => {
     expect(readme).toContain(toPosixPath(relative(process.cwd(), PACK_VERIFIER_PATH)))
+    expect(readme).toContain(toPosixPath(relative(process.cwd(), ANSWER_VERIFIER_PATH)))
     expect(readme).toContain(toPosixPath(relative(process.cwd(), PACK_GATE_CONFIG_PATH)))
   })
 })
@@ -406,6 +453,48 @@ describe('shared GoValidate pack-quality verifier contract', () => {
     expect(result.status).not.toBe(0)
     expect(output).toContain('Malformed gate definition for docs-artifact')
     expect(output).toContain('labels must contain at least one alphanumeric character after normalization')
+  })
+})
+
+describe('shared GoValidate answer-quality verifier contract', () => {
+  it('accepts docs-artifact answers that satisfy deterministic term checks and prints manual review guidance', () => {
+    const result = runAnswerVerifier(
+      'pass',
+      'The idea report is generated when GenerateIdeaReportService handles the controller runtime path.',
+    )
+    const output = combinedOutput(result)
+
+    expect(result.status).toBe(0)
+    expect(output).toContain('docs-artifact')
+    expect(output).toContain('PASS')
+    expect(output).toContain('required answer terms present: idea report, GenerateIdeaReportService')
+    expect(output).toContain('forbidden answer terms present: none')
+    expect(output).toContain('required concepts (manual review): runtime path stays on controller -> service flow')
+    expect(output).toContain('manual review notes: Confirm the answer explains how the report is generated, not just where files exist.')
+  })
+
+  it('fails docs-artifact answers with a useful per-gate summary when answer checks are violated', () => {
+    const result = runAnswerVerifier(
+      'fail',
+      'IdeaReportSharePage renders the final page.',
+    )
+    const output = combinedOutput(result)
+
+    expect(result.status).not.toBe(0)
+    expect(output).toContain('docs-artifact')
+    expect(output).toContain('missing required answer terms: idea report, GenerateIdeaReportService')
+    expect(output).toContain('forbidden answer terms present: IdeaReportSharePage')
+  })
+})
+
+describe('shared GoValidate benchmark suite README', () => {
+  const readme = readFileSync(SUITE_README_PATH, 'utf8')
+
+  it('documents the answer-quality verifier alongside the pack verifier', () => {
+    expect(readme).toContain('verify-pack-quality.js')
+    expect(readme).toContain('verify-answer-quality.js')
+    expect(readme).toContain('--answer <answer.txt>')
+    expect(readme.toLowerCase()).toContain('deterministic answer-term checks')
   })
 })
 

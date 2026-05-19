@@ -77,6 +77,11 @@ interface SharedPackQualityGate {
   max_pack_tokens: number
   max_matched_nodes: number
   max_relationships: number
+  required_answer_terms: string[]
+  forbidden_answer_terms: string[]
+  required_concepts: string[]
+  answer_quality_notes: string[]
+  manual_review_notes: string[]
 }
 
 function resetRunnerOutputDir(): void {
@@ -503,7 +508,7 @@ describe('retrieval quality benchmark', () => {
 })
 
 describe('shared GoValidate pack-quality gate config', () => {
-  it('defines explicit label allow/deny lists and pack ceilings for each shared gate entry', () => {
+  it('defines explicit pack and answer quality gates for each shared gate entry', () => {
     const gateConfig = JSON.parse(readFileSync(SHARED_PACK_QUALITY_GATES_PATH, 'utf8')) as Record<string, SharedPackQualityGate>
     const entries = Object.entries(gateConfig)
 
@@ -521,6 +526,15 @@ describe('shared GoValidate pack-quality gate config', () => {
       expect(gate.max_matched_nodes).toBeGreaterThan(0)
       expect(Number.isInteger(gate.max_relationships)).toBe(true)
       expect(gate.max_relationships).toBeGreaterThanOrEqual(0)
+      expect(Array.isArray(gate.required_answer_terms)).toBe(true)
+      expect(gate.required_answer_terms.length).toBeGreaterThan(0)
+      expect(Array.isArray(gate.forbidden_answer_terms)).toBe(true)
+      expect(Array.isArray(gate.required_concepts)).toBe(true)
+      expect(gate.required_concepts.length).toBeGreaterThan(0)
+      expect(Array.isArray(gate.answer_quality_notes)).toBe(true)
+      expect(gate.answer_quality_notes.length).toBeGreaterThan(0)
+      expect(Array.isArray(gate.manual_review_notes)).toBe(true)
+      expect(gate.manual_review_notes.length).toBeGreaterThan(0)
     }
   })
 })

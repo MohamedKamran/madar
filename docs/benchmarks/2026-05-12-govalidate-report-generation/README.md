@@ -77,6 +77,7 @@ The shared gate definition now lives in:
 
 - `docs/benchmarks/govalidate-suite/quality-gates.json`
 - `docs/benchmarks/govalidate-suite/verify-pack-quality.js`
+- `docs/benchmarks/govalidate-suite/verify-answer-quality.js`
 
 For this prompt, the shared `docs-artifact` gate encodes the same runtime-path requirements and ceilings that were checked for the `v0.22.7` run:
 
@@ -107,6 +108,17 @@ node docs/benchmarks/govalidate-suite/verify-pack-quality.js \
   --config docs/benchmarks/govalidate-suite/quality-gates.json \
   --gate docs-artifact
 ```
+
+Run the answer-quality verifier against the saved graphify answer with:
+
+```bash
+node docs/benchmarks/govalidate-suite/verify-answer-quality.js \
+  --answer path/to/graphify-answer.txt \
+  --config docs/benchmarks/govalidate-suite/quality-gates.json \
+  --gate docs-artifact
+```
+
+The pack check and the answer check serve different purposes: the pack verifier confirms the runtime slice stayed compact and grounded in the expected path, while the answer verifier catches obvious missing facts or forbidden claims in the saved answer text. Neither replaces manual review.
 
 ## Reproducing from this directory
 
