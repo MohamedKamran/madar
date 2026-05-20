@@ -2102,8 +2102,12 @@ describe('graph_summary MCP tool', () => {
         expect(Array.isArray(payload['entrypoints'])).toBe(true)
         expect(Array.isArray(payload['frameworks'])).toBe(true)
         expect(Array.isArray(payload['runtime_paths'])).toBe(true)
-        expect(Array.isArray(payload['source_domains'])).toBe(false)
-        expect(Object.prototype.toString.call(payload['source_domains'])).toBe('[object Object]')
+        const sourceDomains = payload['source_domains']
+        expect(sourceDomains).not.toBeNull()
+        expect(sourceDomains).not.toBeUndefined()
+        expect(typeof sourceDomains).toBe('object')
+        expect(Array.isArray(sourceDomains)).toBe(false)
+        expect(Object.prototype.toString.call(sourceDomains)).toBe('[object Object]')
       } finally {
         rmSync(root, { recursive: true, force: true })
       }
