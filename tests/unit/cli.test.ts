@@ -19,6 +19,7 @@ import {
   parseQueryArgs,
   parseReviewCompareArgs,
   parseSaveResultArgs,
+  parseSummaryArgs,
   parseServeArgs,
   parseTimeTravelArgs,
   parseWatchArgs,
@@ -1779,6 +1780,24 @@ describe('cli main', () => {
 })
 
 describe('summary command', () => {
+  it('parses summary args with positional and --graph forms', () => {
+    expect(parseSummaryArgs([])).toEqual({
+      graphPath: 'graphify-out/graph.json',
+    })
+
+    expect(parseSummaryArgs(['custom.json'])).toEqual({
+      graphPath: 'custom.json',
+    })
+
+    expect(parseSummaryArgs(['--graph', 'custom.json'])).toEqual({
+      graphPath: 'custom.json',
+    })
+
+    expect(parseSummaryArgs(['--graph=custom.json'])).toEqual({
+      graphPath: 'custom.json',
+    })
+  })
+
   it('formatHelp documents the summary command', () => {
     const help = formatHelp()
     expect(help).toContain('summary [graph.json]')
