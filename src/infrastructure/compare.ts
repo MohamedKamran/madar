@@ -5,6 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { KnowledgeGraph } from '../contracts/graph.js'
 import type { ContextSessionState } from '../contracts/context-session.js'
 import { buildContextPrompt, type ContextPromptStableSection } from './context-prompt.js'
+import { buildExplainPackPayload } from './context-pack-command.js'
 import { CODE_EXTENSIONS, DOC_EXTENSIONS, MANIFEST_METADATA_KEY, OFFICE_EXTENSIONS, PAPER_EXTENSIONS } from '../pipeline/detect.js'
 import { extractCompareBaselineNonCodeText } from '../pipeline/extract/non-code.js'
 import { loadBenchmarkQuestions } from './benchmark/questions.js'
@@ -586,49 +587,6 @@ function buildBoundedCorpusExcerpt(question: string, graph: KnowledgeGraph, corp
   return `${note}\n${excerpt}`.trimEnd()
 }
 
-function formatGraphifyContextSections(retrieval: RetrieveResult): ContextPromptStableSection[] {
-  const nodeLines = retrieval.matched_nodes.map((node) => {
-    const source = node.source_file ? ` @ ${node.source_file}${node.line_number > 0 ? `:${node.line_number}` : ''}` : ''
-    const community = node.community_label ? ` [${node.community_label}]` : ''
-    const snippet = node.snippet ? `\n  ${node.snippet}` : ''
-    return `- ${node.label}${source}${community}${snippet}`
-  })
-  const relationshipLines = retrieval.relationships.map((relationship) => `- ${relationship.from} -[${relationship.relation}]-> ${relationship.to}`)
-  const communityLines = retrieval.community_context.map((community) => `- ${community.label} (${community.node_count} nodes)`)
-  const signalLines = [...retrieval.graph_signals.god_nodes, ...retrieval.graph_signals.bridge_nodes]
-
-  return [
-    {
-      ref: 'matched_nodes',
-      sort_key: '10-matched-nodes',
-      title: 'Matched nodes',
-      body: nodeLines.length > 0 ? nodeLines.join('\n') : '- (none)',
-    },
-    {
-      ref: 'relationships',
-      sort_key: '20-relationships',
-      title: 'Relationships',
-      body: relationshipLines.length > 0 ? relationshipLines.join('\n') : '- (none)',
-    },
-    ...(communityLines.length > 0
-      ? [{
-          ref: 'community_context',
-          sort_key: '30-community-context',
-          title: 'Community context',
-          body: communityLines.join('\n'),
-        }]
-      : []),
-    ...(signalLines.length > 0
-      ? [{
-          ref: 'graph_signals',
-          sort_key: '40-graph-signals',
-          title: 'Graph signals',
-          body: `- ${signalLines.join(', ')}`,
-        }]
-      : []),
-  ]
-}
-
 function compareReportPackFromRetrieveResult(retrieval: RetrieveResult): CompareReportPack {
   const compact = compactRetrieveResult(retrieval)
   return {
@@ -1137,13 +1095,24 @@ export function buildBaselinePromptPack(input: BuildBaselinePromptPackInput): Co
 }
 
 export function buildGraphifyPromptPack(input: BuildGraphifyPromptPackInput): ComparePromptPack {
+  const explainPayload = JSON.stringify(
+    buildExplainPackPayload(compactRetrieveResult(input.retrieval), input.retrieval),
+    null,
+    2,
+  )
   const builtPrompt = buildContextPrompt({
     instructions: [
       'Answer the question using only the provided graph-guided retrieval output.',
       'If the retrieval does not contain the answer, say so.',
     ],
     stable_prefix_title: 'Retrieved graph context',
-    stable_sections: formatGraphifyContextSections(input.retrieval),
+    stable_sections: [
+      {
+        ref: 'explain_pack_payload',
+        sort_key: '10-explain-pack-payload',
+        body: explainPayload,
+      },
+    ],
     dynamic_sections: [
       { title: 'Question', body: input.question },
       { body: 'Answer:' },
