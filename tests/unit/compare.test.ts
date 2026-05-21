@@ -15,6 +15,7 @@ import {
   runCompareCommand,
   resolveCompareQuestions,
 } from '../../src/infrastructure/compare.js'
+import { runContextPackCommand } from '../../src/infrastructure/context-pack-command.js'
 import { parsePromptRunnerOutput } from '../../src/infrastructure/prompt-runner.js'
 import { saveManifest } from '../../src/pipeline/manifest.js'
 import { toJson } from '../../src/pipeline/export.js'
@@ -563,7 +564,7 @@ describe('compare runtime', () => {
     expect(followUpGraphifyPrompt).toContain('Session delta:')
     expect(followUpGraphifyPrompt).toContain('Question:\nwhere is session storage defined')
     expect(followUpGraphifyPrompt).not.toContain('Retrieved graph context:')
-    expect(followUpReport.graphify_prompt_tokens_estimated).toBeGreaterThan(estimateQueryTokens(followUpGraphifyPrompt))
+    expect(followUpReport.graphify_reused_context_tokens).toBeGreaterThan(0)
     expect(followUpReport.graphify_effective_prompt_tokens).toBe(
       Math.max(0, followUpReport.graphify_prompt_tokens_estimated - followUpReport.graphify_reused_context_tokens),
     )
@@ -772,19 +773,90 @@ describe('compare runtime', () => {
     ).toThrow(/too small/i)
   })
 
-  it('builds a graphify prompt pack from existing retrieval output', () => {
+  it('builds a graphify prompt pack from the same explain-pack payload core as graphify-ts pack', async () => {
     const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
     const retrieval = retrieveContext(graph, {
       question: 'how does login create a session',
       budget: 3000,
     })
 
+    const explainPayload = JSON.parse(
+      await runContextPackCommand({
+        prompt: retrieval.question,
+        budget: 3000,
+        task: 'explain',
+        graphPath,
+      }),
+    ) as Record<string, unknown>
     const pack = buildGraphifyPromptPack({ question: retrieval.question, retrieval })
+    const expectedPromptCore = JSON.stringify({
+      pack: explainPayload.pack,
+      claims: explainPayload.claims,
+      expandable: explainPayload.expandable,
+      coverage: explainPayload.coverage,
+      missing_context: explainPayload.missing_context,
+      missing_semantic: explainPayload.missing_semantic,
+      retrieval_gate: explainPayload.retrieval_gate,
+    }, null, 2)
 
-    expect(pack.prompt).toContain('Retrieved graph context:')
-    expect(pack.prompt).toContain('authenticateUser')
-    expect(pack.prompt).toContain('SessionManager')
-    expect(pack.prompt).toContain('calls')
+    expect(pack.prompt).toContain(expectedPromptCore)
+    expect(pack.prompt).toContain('"pack"')
+    expect(pack.prompt).toContain('"coverage"')
+    expect(pack.prompt).toContain('"missing_context"')
+  })
+
+  it('includes runtime-generation execution_slice data in pack_only graphify prompts when present', () => {
+    const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
+    const originalRetrieveContext = retrieveRuntime.retrieveContext
+    const retrieveSpy = vi.spyOn(retrieveRuntime, 'retrieveContext').mockImplementation((inputGraph, options) => ({
+      ...originalRetrieveContext(inputGraph, options),
+      retrieval_strategy: 'slice-v1',
+      execution_slice: {
+        status: 'partial',
+        boundary_reason: 'slice stops before expected persistence step',
+        steps: [
+          {
+            node_id: 'auth_user',
+            label: 'authenticateUser',
+            source_file: 'src/auth.ts',
+            line_number: 10,
+            node_kind: 'function',
+          },
+          {
+            node_id: 'session_manager',
+            label: 'SessionManager',
+            source_file: 'src/session.ts',
+            line_number: 3,
+            node_kind: 'class',
+          },
+        ],
+      },
+    }))
+
+    try {
+      const result = generateCompareArtifacts({
+        graphPath,
+        question: 'Explain the runtime path for login session creation',
+        outputDir: COMPARE_OUTPUT_ROOT,
+        execTemplate: 'runner --prompt {prompt_file} --question {question} --mode {mode} --out {output_file}',
+        baselineMode: 'pack_only',
+        now: new Date('2026-04-24T19:30:00.000Z'),
+      })
+
+      const report = result.reports[0]!
+      const graphifyPrompt = readFileSync(report.paths.graphify_prompt, 'utf8')
+
+      expect(graphifyPrompt).toContain('"execution_slice"')
+      expect(graphifyPrompt).toContain('"status": "partial"')
+      expect(graphifyPrompt).toContain('"boundary_reason": "slice stops before expected persistence step"')
+      expect(graphifyPrompt).toContain('"retrieval_strategy": "slice-v1"')
+    } finally {
+      retrieveSpy.mockRestore()
+    }
   })
 
   it('computes prompt token counts from the exact prompt text', () => {
@@ -861,6 +933,8 @@ describe('compare runtime', () => {
     expect(baselinePrompt).toContain('return new SessionManager().createSession(credentials.userId)')
     expect(baselinePrompt).toContain('export class SessionManager')
     expect(graphifyPrompt).toContain('Retrieved graph context:')
+    expect(graphifyPrompt).toContain('"pack"')
+    expect(graphifyPrompt).toContain('"coverage"')
     expect(savedReport).toEqual(
       expect.objectContaining({
         question: 'how does login create a session',
@@ -3061,8 +3135,10 @@ describe('compare runtime', () => {
       })
 
       const graphifyPrompt = readFileSync(result.reports[0]!.paths.graphify_prompt, 'utf8')
-      expect(graphifyPrompt).toContain('ArchiveDash @ ../../../vault/private-notes.txt:1')
-      expect(graphifyPrompt).toContain('ArchiveNested @ ../../../vault/private/notes.txt:1')
+      expect(graphifyPrompt).toContain('"label": "ArchiveDash"')
+      expect(graphifyPrompt).toContain('"source_file": "../../../vault/private-notes.txt"')
+      expect(graphifyPrompt).toContain('"label": "ArchiveNested"')
+      expect(graphifyPrompt).toContain('"source_file": "../../../vault/private/notes.txt"')
       expect(graphifyPrompt).not.toContain('outside dash snippet')
       expect(graphifyPrompt).not.toContain('outside nested snippet')
     } finally {
