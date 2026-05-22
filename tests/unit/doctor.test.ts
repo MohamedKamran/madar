@@ -30,7 +30,7 @@ function writeMcpServer(path: string, serversKey: 'mcpServers' | 'servers', grap
     [serversKey]: {
       madar: {
         command: 'npx',
-        args: ['--yes', '@mohammednagy/madar', 'serve', '--stdio', graphPath],
+        args: ['--yes', 'madar', 'serve', '--stdio', graphPath],
       },
     },
   })
@@ -118,6 +118,35 @@ describe('doctor command', () => {
       expect(output).toContain('.mcp.json')
       expect(output).toContain('stale')
       expect(output).toContain('madar claude install')
+    })
+  })
+
+  test('does not treat unrelated checkout hooks as configured', () => {
+    withSandbox((sandboxDir) => {
+      const graphPath = resolve(sandboxDir, 'out', 'graph.json')
+      writeText(graphPath, '{"nodes":[],"edges":[]}\n')
+      writeText(resolve(sandboxDir, 'CLAUDE.md'), '## madar\n')
+      writeText(resolve(sandboxDir, 'GEMINI.md'), '## madar\n')
+      writeJson(resolve(sandboxDir, '.claude', 'settings.json'), {
+        hooks: {
+          PreToolUse: [{ matcher: 'Read', hooks: [{ type: 'command', command: 'echo checkout complete' }] }],
+        },
+      })
+      writeJson(resolve(sandboxDir, '.gemini', 'settings.json'), {
+        hooks: {
+          BeforeTool: [{ matcher: 'read_file', hooks: [{ type: 'command', command: 'echo linked checkout ready' }] }],
+        },
+      })
+
+      const output = runDoctorCommand({
+        projectDir: sandboxDir,
+        now: Date.now(),
+      })
+
+      expect(output).toContain('claude: partial')
+      expect(output).toContain('gemini: partial')
+      expect(output).toContain('madar claude install')
+      expect(output).toContain('madar gemini install')
     })
   })
 })

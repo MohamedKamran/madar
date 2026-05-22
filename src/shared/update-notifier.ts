@@ -189,7 +189,7 @@ function formatUpdateNotice(packageName: string, currentVersion: string, latestV
   return [
     `A newer madar is available: ${currentVersion} -> ${latestVersion}`,
     `Update: npm i -g ${packageName}@latest`,
-    'Then re-run: madar claude install | cursor install | gemini install',
+    'Then re-run: madar claude install | madar cursor install | madar gemini install',
   ].join('\n')
 }
 

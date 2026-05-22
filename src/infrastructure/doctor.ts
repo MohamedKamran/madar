@@ -47,6 +47,8 @@ interface JsonObject {
   [key: string]: unknown
 }
 
+const OUT_PATH_SEGMENT_PATTERN = /(^|[^a-z0-9_])out(?:[\\/]|[^a-z0-9_]|$)/i
+
 export interface DoctorCommandOptions {
   graphPath?: string
   projectDir?: string
@@ -113,7 +115,20 @@ function findHookEntry(settingsPath: string, hookName: 'PreToolUse' | 'BeforeToo
     return false
   }
 
-  return hookEntries.some((entry) => JSON.stringify(entry).includes('out'))
+  return hookEntries.some(containsOutPathReference)
+}
+
+function containsOutPathReference(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return OUT_PATH_SEGMENT_PATTERN.test(value)
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsOutPathReference)
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some(containsOutPathReference)
+  }
+  return false
 }
 
 function extractGraphPathFromArgs(args: unknown): string | null {

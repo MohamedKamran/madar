@@ -20,7 +20,7 @@ fi
 # Check if madar is installed
 if ! command -v madar &> /dev/null; then
   echo "Installing madar..."
-  npm install -g @mohammednagy/madar
+  npm install -g madar
 fi
 
 # Generate graph

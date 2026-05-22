@@ -142,7 +142,7 @@ command -v node >/dev/null 2>&1 || {
   echo "[madar] Node.js is required for madar."
   exit 1
 }
-node dist/src/cli/bin.js --help >/dev/null 2>&1 || npx --yes @mohammednagy/madar --help >/dev/null 2>&1 || {
+node dist/src/cli/bin.js --help >/dev/null 2>&1 || npx --yes madar --help >/dev/null 2>&1 || {
   echo "[madar] madar CLI is not available in this environment."
   echo "[madar] Install or build the TypeScript package before continuing."
   exit 1
@@ -158,7 +158,7 @@ function windowsInstallStep(): string {
   return `### Step 1 - Ensure the TypeScript CLI is available
 
 ${CODE_BLOCK_START}powershell
-npx --yes @mohammednagy/madar --help *> $null
+npx --yes madar --help *> $null
 if ($LASTEXITCODE -ne 0) {
   node dist/src/cli/bin.js --help *> $null
 }
@@ -177,8 +177,8 @@ function detectStep(codeFence: 'bash' | 'powershell'): string {
   const targetPathDeclaration = codeFence === 'bash' ? 'TARGET_PATH="."' : '$TargetPath = "."'
   const availabilityCheck =
     codeFence === 'bash'
-      ? 'node dist/src/cli/bin.js --help >/dev/null 2>&1 || npx --yes @mohammednagy/madar --help >/dev/null 2>&1'
-      : 'npx --yes @mohammednagy/madar --help *> $null; if ($LASTEXITCODE -ne 0) { node dist/src/cli/bin.js --help *> $null }'
+      ? 'node dist/src/cli/bin.js --help >/dev/null 2>&1 || npx --yes madar --help >/dev/null 2>&1'
+      : 'npx --yes madar --help *> $null; if ($LASTEXITCODE -ne 0) { node dist/src/cli/bin.js --help *> $null }'
 
   return `### Step 2 - Detect files with the TypeScript implementation
 

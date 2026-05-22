@@ -121,7 +121,7 @@ function hookCommandWithFallback(matchJson: string, missJson: string): string {
 }
 
 function decodeGeneratedHookPayloads(command: string): string[] {
-  return [...command.matchAll(/Buffer\.from\('([A-Za-z0-9+/=]{40,})','base64'\)/g)]
+  return [...command.matchAll(/'([A-Za-z0-9+/=]{40,})'/g)]
     .map((match) => match[1])
     .filter((value): value is string => typeof value === 'string')
     .map((value) => Buffer.from(value, 'base64').toString('utf8'))
@@ -143,6 +143,33 @@ function isMadarCodexHookCommand(command: string): boolean {
     command.includes("accessSync('out/graph.json')") &&
     command.includes('process.stdout.write(Buffer.from(') &&
     decodeGeneratedHookPayloads(command).some(isMadarCodexHookPayload)
+  )
+}
+
+function isMadarProjectHookPayload(payload: string): boolean {
+  return payload.includes('"additionalContext"')
+    && (payload.includes(RETRIEVE_FIRST_MESSAGE) || payload.includes(STRICT_CONTEXT_PACK_MESSAGE))
+}
+
+function isMadarProjectHookCommand(command: string): boolean {
+  return (
+    command.includes("accessSync('out/graph.json')") &&
+    command.includes('process.stdout.write(Buffer.from(') &&
+    decodeGeneratedHookPayloads(command).some(isMadarProjectHookPayload)
+  )
+}
+
+function isMadarProjectHook(hook: unknown, matcher: string): boolean {
+  if (!isRecord(hook) || hook.matcher !== matcher || !Array.isArray(hook.hooks)) {
+    return false
+  }
+
+  return hook.hooks.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === 'command' &&
+      typeof entry.command === 'string' &&
+      isMadarProjectHookCommand(entry.command),
   )
 }
 
@@ -393,8 +420,7 @@ IMPORTANT: This project has a madar knowledge graph. Use strict compact MCP guid
 const SKILL_REGISTRATION_MARKER = '- **madar**'
 const LOCAL_SKILL_ASSET_DIRECTORY = join('assets', 'skills')
 const PRIMARY_CLI_BIN_NAME = 'madar'
-const LEGACY_CLI_BIN_NAME = 'madar'
-const CLI_BIN_NAMES = [PRIMARY_CLI_BIN_NAME, LEGACY_CLI_BIN_NAME] as const
+const CLI_BIN_NAMES = [PRIMARY_CLI_BIN_NAME] as const
 const OPENCODE_PLUGIN_RELATIVE_PATH = '.opencode/plugins/madar.js'
 const OPENCODE_JSON_CONFIG_PATH = 'opencode.json'
 const OPENCODE_JSONC_CONFIG_PATH = 'opencode.jsonc'
@@ -1488,7 +1514,7 @@ function installClaudeHook(projectDir: string, profile?: InstallProfile): string
   const hooks = ensureRecord(settings, 'hooks')
   const preToolUse = ensureArray(hooks, 'PreToolUse')
 
-  const existingIndex = preToolUse.findIndex((hook) => isRecord(hook) && JSON.stringify(hook).includes('out'))
+  const existingIndex = preToolUse.findIndex((hook) => isMadarProjectHook(hook, 'Glob|Grep|Bash|Agent|Read'))
   if (existingIndex >= 0) {
     preToolUse[existingIndex] = settingsHook(profile)
     writeJson(settingsPath, settings)
@@ -1509,7 +1535,7 @@ function uninstallClaudeHook(projectDir: string): string | undefined {
   const settings = readJsonObject(settingsPath)
   const hooks = ensureRecord(settings, 'hooks')
   const preToolUse = ensureArray(hooks, 'PreToolUse')
-  const filtered = preToolUse.filter((hook) => !(isRecord(hook) && JSON.stringify(hook).includes('out')))
+  const filtered = preToolUse.filter((hook) => !isMadarProjectHook(hook, 'Glob|Grep|Bash|Agent|Read'))
 
   if (filtered.length === preToolUse.length) {
     return undefined
@@ -1526,7 +1552,7 @@ function installGeminiHook(projectDir: string, profile?: InstallProfile): string
   const hooks = ensureRecord(settings, 'hooks')
   const beforeTool = ensureArray(hooks, 'BeforeTool')
   const nextHook = geminiHook(profile)
-  const existingIndex = beforeTool.findIndex((hook) => JSON.stringify(hook).includes('out'))
+  const existingIndex = beforeTool.findIndex((hook) => isMadarProjectHook(hook, 'read_file|list_directory|search_for_pattern'))
 
   if (existingIndex >= 0) {
     if (JSON.stringify(beforeTool[existingIndex]) === JSON.stringify(nextHook)) {

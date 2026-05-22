@@ -845,7 +845,7 @@ describe('install helpers', () => {
 
       withTempDir((projectDir) => {
         expect(() => agentsInstall(projectDir, 'opencode', { packageRoot })).toThrow(
-          `Could not locate a madar or madar CLI at ${join(packageRoot, PACKAGE_CLI_RELATIVE_PATH)} declared by ${join(packageRoot, 'package.json')}`,
+          `Could not locate a madar CLI at ${join(packageRoot, PACKAGE_CLI_RELATIVE_PATH)} declared by ${join(packageRoot, 'package.json')}`,
         )
       })
     })

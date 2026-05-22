@@ -59,7 +59,7 @@ madar pack "Explain how idea report is getting generated" \
   --budget 4000 \
   --graph out/graph.json
 
-madar compare "Explain how idea report is getting generated " \
+madar compare "Explain how idea report is getting generated" \
   --exec 'cat {prompt_file} | claude -p --output-format json' \
   --yes \
   --baseline-mode native_agent

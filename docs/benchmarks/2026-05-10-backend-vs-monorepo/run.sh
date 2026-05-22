@@ -134,7 +134,7 @@ run_compare_for_scope() {
 
   echo "[harness]   compare ($scope_label): $prompt_id"
   ( cd "$scope_path" && madar compare "$prompt_text" \
-      --graph "$scope_path/out/graph.json" \
+      --graph "out/graph.json" \
       --baseline-mode native_agent \
       --exec "$EXEC" \
       --yes ) > "$outdir/compare.log" 2>&1 || {

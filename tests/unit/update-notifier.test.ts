@@ -12,7 +12,7 @@ describe('update notifier', () => {
 
     try {
       const notice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -23,7 +23,8 @@ describe('update notifier', () => {
 
       expect(notice).toContain('0.22.8')
       expect(notice).toContain('0.22.9')
-      expect(notice).toContain('npm i -g @mohammednagy/madar@latest')
+      expect(notice).toContain('npm i -g madar@latest')
+      expect(notice).toContain('madar claude install | madar cursor install | madar gemini install')
 
       const cacheFile = join(cacheRoot, 'madar', 'update-check.json')
       expect(JSON.parse(readFileSync(cacheFile, 'utf8'))).toEqual({
@@ -42,7 +43,7 @@ describe('update notifier', () => {
 
     try {
       const firstNotice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -55,7 +56,7 @@ describe('update notifier', () => {
       })
 
       const secondNotice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -88,7 +89,7 @@ describe('update notifier', () => {
       }))
 
       const notice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -122,7 +123,7 @@ describe('update notifier', () => {
       }))
 
       const notice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -135,7 +136,7 @@ describe('update notifier', () => {
       })
 
       const secondNotice = await getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,
@@ -166,7 +167,7 @@ describe('update notifier', () => {
 
     try {
       await expect(getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: false,
@@ -178,7 +179,7 @@ describe('update notifier', () => {
       })).resolves.toBeNull()
 
       await expect(getUpdateNotification({
-        packageName: '@mohammednagy/madar',
+        packageName: 'madar',
         currentVersion: '0.22.8',
         cacheRoot,
         stdoutIsTTY: true,

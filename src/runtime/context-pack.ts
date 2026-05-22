@@ -702,7 +702,8 @@ function looksLikeBarrelFile(sourceFile: string): boolean {
 }
 
 function looksGenerated(sourceFile: string, label: string, snippet: string | null): boolean {
-  if (/generated|__snapshots__|\.min\.|dist\/|build\/|coverage\/|out\//i.test(sourceFile)) {
+  const normalizedSourceFile = sourceFile.replace(/\\/g, '/')
+  if (/(?:^|\/)(?:__snapshots__|dist|build|coverage|out)(?:\/|$)/i.test(normalizedSourceFile) || /generated|\.min\./i.test(normalizedSourceFile)) {
     return true
   }
 

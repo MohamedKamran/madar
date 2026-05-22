@@ -9,7 +9,7 @@ export const WATCHED_EXTENSIONS = new Set([...CODE_EXTENSIONS, ...DOC_EXTENSIONS
 const MAX_SYMLINK_DEPTH = 40
 const MAX_WATCHED_FILES = 10_000
 
-const WATCH_IGNORED_DIRECTORIES = new Set(['.git', 'out', 'node_modules', 'dist', 'build', 'target', 'out', 'venv', '.venv', 'env', '.env', '__pycache__'])
+const WATCH_IGNORED_DIRECTORIES = new Set(['.git', 'out', 'node_modules', 'dist', 'build', 'target', 'venv', '.venv', 'env', '.env', '__pycache__'])
 
 export interface WatchLogger {
   log(message?: string): void

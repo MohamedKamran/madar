@@ -102,5 +102,6 @@ describe('built-in install templates', () => {
     expect(content).toContain('Manual verification')
     expect(content).toContain('Codex limitations')
     expect(content).toContain('spawn_agent')
+    expect(content).toContain('npx --yes madar --help')
   })
 })

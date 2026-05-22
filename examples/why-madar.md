@@ -196,7 +196,7 @@ Use this proof when you are validating PR-review ergonomics rather than general 
 
 ```bash
 # Install
-npm install -g @mohammednagy/madar
+npm install -g madar
 
 # Generate graph for your project
 madar generate .
