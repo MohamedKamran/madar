@@ -66,11 +66,13 @@ Want a broader local-first walkthrough that also covers install, `prompt`, and a
 
 ---
 
-## What's new in 0.25.0
+## What's new in 0.25.1
 
-- Backend runtime answers now emit a much richer `execution_slice`: you get a clearer primary runtime path, prompt-scoped `phase_coverage`, and summarized side-effect / terminal / omitted branches instead of one flattened path dump.
-- Go repos now get first-pass semantic indexing for receiver methods, local-package and cross-package calls, and common `net/http`, Gin, and Chi route entrypoints, so generated graphs and retrieval answers are much closer to real handler → service → repository flow.
-- This is a feature release on top of the `0.24.1` Copilot installer patch. For the previous MCP startup fix, see the [`0.24.1` changelog entry](CHANGELOG.md#0241---2026-05-23).
+- Natural-language runtime-generation prompts like `How idea report is being generated` now route to behavior-slice retrieval automatically, so users do not need special trace phrasing to get backend runtime answers.
+- `madar pack --task explain` now defaults to `slice-v1` for those runtime-generation prompts, which means `execution_slice` shows up without asking users to discover the extra retrieval flag.
+- `madar compare` now uses the same runtime-generation defaults as `madar pack`, so compare artifacts stay aligned with the actual CLI behavior.
+
+The larger **0.25.0** feature release is still the main capability jump: richer backend `execution_slice` output plus first-pass Go semantic indexing for handler → service → repository style flows. See the [`0.25.0` changelog entry](CHANGELOG.md#0250---2026-05-23) for that broader release.
 
 The larger **What's new in 0.23.0** additions are still part of the main flow too: `madar summary`, the core MCP `graph_summary` tool, runtime `execution_slice` output, share-safe `report.share-safe.json` compare artifacts, and `compare --baseline-mode pack_only`.
 
@@ -78,7 +80,7 @@ If you want the broader proof-oriented workflow behind the current surfaces, sta
 
 ### When to use `--spi`
 
-`--spi` is **still opt-in** in 0.24.1. Use it when your repo is framework-heavy TypeScript/JavaScript and you want the extra framework-shaped metadata plus disk cache behavior.
+`--spi` is **still opt-in** in 0.25.1. Use it when your repo is framework-heavy TypeScript/JavaScript and you want the extra framework-shaped metadata plus disk cache behavior.
 
 `--spi` is usually worth it for NestJS, Next.js App Router, Prisma, tRPC, Hono, Fastify, and similar repos where users ask storage-oriented prompts, client/server boundary questions, or request-flow questions. The default pipeline is still fine for simpler repos, non-JS/TS workspaces, or quick first runs when you do not need the extra framework detail yet.
 
