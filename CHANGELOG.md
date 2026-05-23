@@ -4,6 +4,14 @@ All notable changes to the TypeScript package will be documented in this file.
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-05-23
+
+### Changed
+
+- **Natural runtime-generation explain prompts now auto-route to behavior slices**: prompts like `How idea report is being generated` no longer need special "trace the backend runtime pipeline" wording to reach level-3 runtime retrieval.
+- **`pack --task explain` now defaults to `slice-v1` for runtime-generation questions**: users no longer need to know the experimental retrieval flag to get `execution_slice` output for these backend runtime prompts.
+- **`compare` stays aligned with `pack` for runtime-generation prompts**: compare-mode madar prompt packs now use the same runtime-generation routing defaults as the main CLI path, so proof artifacts match the user-facing behavior.
+
 ## [0.25.0] - 2026-05-23
 
 ### Added
