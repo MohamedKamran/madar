@@ -460,6 +460,80 @@ describe('SPI realistic Nest DI runtime-call fixture', () => {
     expect(result.slice?.anchors.some((anchor) => frontendLabels.includes(anchor.label))).toBe(false)
   })
 
+  it('models primary path, side effects, terminal boundaries, and omitted branches for report-generation prompts', () => {
+    const result = retrieveContext(buildFixtureGraph({ windowsSourcePaths: true }), {
+      question: 'Explain how idea report is getting generated',
+      budget: 4000,
+      retrievalLevel: 4,
+      retrievalStrategy: 'slice-v1',
+    })
+
+    const executionSlice = result.execution_slice
+    const primaryLabels = executionSlice?.primary_path?.steps.map((step) => step.label) ?? []
+    const compact = compactRetrieveResult(result)
+    const compactExecutionSliceSize = JSON.stringify(compact.execution_slice ?? {}).length
+    const sideEffectLabels = executionSlice?.side_effects?.flatMap((branch) => branch.steps.map((step) => step.label)) ?? []
+    const omittedTargets = executionSlice?.omitted_branches?.map((branch) => branch.to ?? '') ?? []
+
+    expect(executionSlice).toEqual(expect.objectContaining({
+      status: 'complete',
+      steps: [
+        expect.objectContaining({ label: '.generateFromProblem()' }),
+        expect.objectContaining({ label: '.startPipeline()' }),
+        expect.objectContaining({ label: '.addJob()' }),
+        expect.objectContaining({ label: '.process()' }),
+        expect.objectContaining({ label: '.save()' }),
+      ],
+      primary_path: expect.objectContaining({
+        steps: [
+          expect.objectContaining({ label: '.generateFromProblem()' }),
+          expect.objectContaining({ label: '.startPipeline()' }),
+          expect.objectContaining({ label: '.addJob()' }),
+          expect.objectContaining({ label: '.process()' }),
+          expect.objectContaining({ label: '.save()' }),
+        ],
+        boundaries: expect.arrayContaining([
+          expect.objectContaining({ from: '.addJob()', to: '.process()', relation: 'enqueues_job' }),
+        ]),
+      }),
+      side_effects: expect.arrayContaining([
+        expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ label: '.createIdea()' }),
+          ]),
+        }),
+      ]),
+      terminal_boundaries: expect.arrayContaining([
+        expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ label: '.claimQueuedPipelineRun()' }),
+          ]),
+        }),
+        expect.objectContaining({
+          steps: expect.arrayContaining([
+            expect.objectContaining({ label: '.cancelPipeline()' }),
+          ]),
+        }),
+      ]),
+      phase_coverage: {
+       expected: ['controller', 'service', 'queue', 'worker'],
+       observed: expect.arrayContaining(['controller', 'service', 'queue', 'worker']),
+       missing: [],
+      },
+    }))
+    expect(sideEffectLabels.length).toBeGreaterThanOrEqual(2)
+    expect(sideEffectLabels).toEqual(expect.arrayContaining(['.createIdea()']))
+    expect(sideEffectLabels.some((label) => ['.generateTitle()', '.updateTitle()'].includes(label))).toBe(true)
+    expect(omittedTargets.some((label) => ['.suggestProblem()', '.add()', 'Process()', '.score()', '.search()'].includes(label))).toBe(true)
+    expect(primaryLabels).toEqual(expect.arrayContaining([
+      '.startPipeline()',
+      '.addJob()',
+      '.process()',
+    ]))
+    expect(compact.token_count).toBeLessThan(4000)
+    expect(compactExecutionSliceSize).toBeLessThan(4000)
+  })
+
   it('prefers ReportRepository.save for storage-boundary prompts', () => {
     const result = retrieveContext(buildFixtureGraph({ windowsSourcePaths: true }), {
       question: 'Which method writes the report to the database?',

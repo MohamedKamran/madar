@@ -14,13 +14,19 @@ function buildRuntimeGenerationGraph() {
           { id: 'auth_route', label: 'POST /login', file_type: 'code', source_file: '/src/auth/routes.ts', source_location: 'L10', node_kind: 'route', framework: 'express', framework_role: 'express_route', community: 0 },
           { id: 'auth_controller', label: 'AuthController.login', file_type: 'code', source_file: '/src/auth/controller.ts', source_location: 'L20', node_kind: 'method', framework: 'nestjs', framework_role: 'nest_controller', community: 0 },
           { id: 'auth_service', label: 'AuthService.login', file_type: 'code', source_file: '/src/auth/service.ts', source_location: 'L30', node_kind: 'method', community: 0 },
-          { id: 'session_store', label: 'SessionStore.createSession', file_type: 'code', source_file: '/src/session/store.ts', source_location: 'L40', node_kind: 'method', community: 1 },
-          { id: 'auth_test', label: 'AuthService.login.spec', file_type: 'code', source_file: '/tests/auth.service.spec.ts', source_location: 'L50', node_kind: 'function', community: 2 },
+          { id: 'queue_registry', label: 'QueueRegistry.addJob', file_type: 'code', source_file: '/src/queue/registry.ts', source_location: 'L40', node_kind: 'method', community: 1 },
+          { id: 'auth_worker', label: 'AuthWorker.process', file_type: 'code', source_file: '/src/auth/worker.ts', source_location: 'L50', node_kind: 'method', framework_role: 'worker', community: 1 },
+          { id: 'session_store', label: 'SessionStore.createSession', file_type: 'code', source_file: '/src/session/store.ts', source_location: 'L60', node_kind: 'method', community: 1 },
+          { id: 'audit_publisher', label: 'AuditPublisher.publishLogin', file_type: 'code', source_file: '/src/auth/audit.ts', source_location: 'L70', node_kind: 'method', community: 2 },
+          { id: 'auth_test', label: 'AuthService.login.spec', file_type: 'code', source_file: '/tests/auth.service.spec.ts', source_location: 'L80', node_kind: 'function', community: 2 },
         ],
         edges: [
           { source: 'auth_route', target: 'auth_controller', relation: 'controller_route', confidence: 'EXTRACTED', source_file: '/src/auth/routes.ts' },
           { source: 'auth_controller', target: 'auth_service', relation: 'calls', confidence: 'EXTRACTED', source_file: '/src/auth/controller.ts' },
-          { source: 'auth_service', target: 'session_store', relation: 'calls', confidence: 'EXTRACTED', source_file: '/src/auth/service.ts' },
+          { source: 'auth_service', target: 'queue_registry', relation: 'calls', confidence: 'EXTRACTED', source_file: '/src/auth/service.ts' },
+          { source: 'auth_service', target: 'audit_publisher', relation: 'calls', confidence: 'EXTRACTED', source_file: '/src/auth/service.ts' },
+          { source: 'queue_registry', target: 'auth_worker', relation: 'enqueues_job', confidence: 'EXTRACTED', source_file: '/src/queue/registry.ts' },
+          { source: 'auth_worker', target: 'session_store', relation: 'calls', confidence: 'EXTRACTED', source_file: '/src/auth/worker.ts' },
           { source: 'auth_service', target: 'auth_test', relation: 'covered_by', confidence: 'EXTRACTED', source_file: '/src/auth/service.ts' },
         ],
       },
@@ -55,6 +61,12 @@ describe('context-pack-command', () => {
         execution_slice?: {
           status?: string
           steps?: Array<{ label?: string }>
+          primary_path?: {
+            boundaries?: Array<{ relation?: string }>
+          }
+          phase_coverage?: {
+            missing?: string[]
+          }
         }
       }
     }
@@ -66,15 +78,27 @@ describe('context-pack-command', () => {
       taskIntent: 'explain',
       retrievalStrategy: 'slice-v1',
     })
-    expect(payload.pack?.execution_slice).toEqual({
+    expect(payload.pack?.execution_slice).toEqual(expect.objectContaining({
       status: 'complete',
       steps: [
         expect.objectContaining({ label: 'POST /login' }),
         expect.objectContaining({ label: 'AuthController.login' }),
         expect.objectContaining({ label: 'AuthService.login' }),
+        expect.objectContaining({ label: 'QueueRegistry.addJob' }),
+        expect.objectContaining({ label: 'AuthWorker.process' }),
         expect.objectContaining({ label: 'SessionStore.createSession' }),
       ],
-    })
+      primary_path: expect.objectContaining({
+        boundaries: expect.arrayContaining([
+          expect.objectContaining({ relation: 'enqueues_job' }),
+        ]),
+      }),
+      phase_coverage: {
+        expected: ['controller', 'service', 'queue', 'worker', 'persistence'],
+        observed: expect.arrayContaining(['controller', 'service', 'queue', 'worker', 'persistence']),
+        missing: [],
+      },
+    }))
   })
 
   it('normalizes sub-minimum explain budgets before retrieving', async () => {

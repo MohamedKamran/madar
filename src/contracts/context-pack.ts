@@ -68,10 +68,45 @@ export interface ContextPackExecutionSliceStep {
   framework_role?: string
 }
 
+export interface ContextPackExecutionSliceBoundary {
+  from?: string
+  to?: string
+  relation: string
+}
+
+export interface ContextPackExecutionSliceBranch {
+  steps: ContextPackExecutionSliceStep[]
+  boundary_reason?: string
+}
+
+export interface ContextPackExecutionSliceOmittedBranch {
+  from?: string
+  to?: string
+  relation?: string
+  reason?: string
+}
+
+export interface ContextPackExecutionSlicePrimaryPath {
+  steps: ContextPackExecutionSliceStep[]
+  boundaries?: ContextPackExecutionSliceBoundary[]
+  boundary_reason?: string
+}
+
+export interface ContextPackExecutionSlicePhaseCoverage {
+  expected: string[]
+  observed: string[]
+  missing: string[]
+}
+
 export interface ContextPackExecutionSlice {
   status: 'complete' | 'partial'
   boundary_reason?: string
   steps: ContextPackExecutionSliceStep[]
+  primary_path?: ContextPackExecutionSlicePrimaryPath
+  side_effects?: ContextPackExecutionSliceBranch[]
+  terminal_boundaries?: ContextPackExecutionSliceBranch[]
+  omitted_branches?: ContextPackExecutionSliceOmittedBranch[]
+  phase_coverage?: ContextPackExecutionSlicePhaseCoverage
 }
 
 export type ContextRepresentationType =

@@ -3,6 +3,9 @@ import { basename } from 'node:path'
 
 import type {
   ContextPackExecutionSlice,
+  ContextPackExecutionSliceBoundary,
+  ContextPackExecutionSliceBranch,
+  ContextPackExecutionSliceOmittedBranch,
   ContextPackExecutionSliceStep,
   CompiledContextPack,
   ContextPackClaim,
@@ -1557,6 +1560,19 @@ function executionSliceStepFromGraph(
   }
 }
 
+type ExecutionPhase = 'controller' | 'service' | 'queue' | 'worker' | 'persistence'
+
+interface ExecutionFlowEdge {
+  fromId: string
+  toId: string
+  relation: string
+}
+
+interface ExecutionPathCandidate {
+  nodeIds: string[]
+  edges: ExecutionFlowEdge[]
+}
+
 function collectExecutionSliceScope(
   graph: KnowledgeGraph,
   sliceMetadata: ContextPackSliceMetadata,
@@ -1624,6 +1640,358 @@ function collectExecutionSliceScope(
   }
 
   return { orderedIds, idSet }
+}
+
+function controllerLikeExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /\b(?:route|controller|handler|endpoint)\b/.test(lower)
+}
+
+function serviceLikeExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /\b(?:service|provider|application|usecase|use-case|trigger|orchestrator)\b/.test(lower)
+}
+
+function queueLikeExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /\b(?:queue|enqueue|job|addjob|pipeline)\b/.test(lower)
+}
+
+function workerLikeExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /\b(?:worker|processor|process\b|orchestrator)\b/.test(lower)
+}
+
+function lowValueExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /\b(?:logger|log|status|getstatus|get|list|health|validate|validator|suggest|guard|interceptor|swagger|spec|test|env|config)\b/.test(lower)
+    || /(?:^|[.#])(?:get|list|status|validate|suggest)[A-Za-z_$\w]*\(?\)?$/i.test(node.label)
+    || /^process\(\)$/i.test(node.label)
+    || /^\.add\(\)$/i.test(node.label)
+}
+
+function terminalBoundaryExecutionStep(
+  node: Pick<ContextPackExecutionSliceStep, 'label' | 'source_file' | 'node_kind' | 'framework_role'>,
+): boolean {
+  const lower = `${node.label} ${node.source_file} ${node.node_kind ?? ''} ${node.framework_role ?? ''}`.toLowerCase()
+  return /(?:^|[.#])(?:cancel|claim|status|get|list|retry)[A-Za-z_$\w]*\(?\)?$/i.test(node.label)
+    || /\b(?:cancel|claim|status)\b/.test(lower)
+}
+
+function executionPhasesForStep(step: ContextPackExecutionSliceStep): Set<ExecutionPhase> {
+  const phases = new Set<ExecutionPhase>()
+  if (controllerLikeExecutionStep(step)) phases.add('controller')
+  if (serviceLikeExecutionStep(step)) phases.add('service')
+  if (queueLikeExecutionStep(step)) phases.add('queue')
+  if (workerLikeExecutionStep(step)) phases.add('worker')
+  if (persistenceLikeExecutionStep(step)) phases.add('persistence')
+  return phases
+}
+
+function expectedExecutionPhases(question: string): ExecutionPhase[] {
+  const phases: ExecutionPhase[] = ['controller', 'service']
+  if (promptWantsRuntimePipeline(question)) {
+    phases.push('queue', 'worker')
+  }
+  if (promptExpectsPersistenceStep(question)) {
+    phases.push('persistence')
+  }
+  return [...new Set(phases)]
+}
+
+function missingExecutionPhaseBoundaryReason(phase: ExecutionPhase): string {
+  switch (phase) {
+    case 'worker':
+      return 'missing expected worker phase'
+    case 'persistence':
+      return 'missing expected persistence phase'
+    case 'queue':
+      return 'missing expected queue phase'
+    case 'service':
+      return 'missing expected service phase'
+    case 'controller':
+    default:
+      return 'missing expected controller phase'
+  }
+}
+
+function executionFlowAdjacency(
+  graph: KnowledgeGraph,
+  sliceMetadata: ContextPackSliceMetadata,
+  idSet: ReadonlySet<string>,
+  resolveNodeId: (nodeId: string | undefined, label: string) => string | undefined,
+): Map<string, ExecutionFlowEdge[]> {
+  const adjacency = new Map<string, ExecutionFlowEdge[]>()
+  const record = (edge: ExecutionFlowEdge): void => {
+    const current = adjacency.get(edge.fromId) ?? []
+    current.push(edge)
+    adjacency.set(edge.fromId, current)
+  }
+
+  for (const path of sliceMetadata.selected_paths) {
+    if (path.direction !== 'forward' || !executionSliceFlowRelation(path.relation)) {
+      continue
+    }
+    const fromId = resolveNodeId(path.from_id, path.from)
+    const toId = resolveNodeId(path.to_id, path.to)
+    if (!fromId || !toId || !idSet.has(fromId) || !idSet.has(toId)) {
+      continue
+    }
+    record({ fromId, toId, relation: path.relation })
+  }
+
+  if (adjacency.size > 0) {
+    return adjacency
+  }
+
+  for (const fromId of idSet) {
+    for (const toId of graph.successors(fromId)) {
+      if (!idSet.has(toId)) {
+        continue
+      }
+      const relation = String(graph.edgeAttributes(fromId, toId).relation ?? 'related_to')
+      if (!executionSliceFlowRelation(relation)) {
+        continue
+      }
+      record({ fromId, toId, relation })
+    }
+  }
+
+  return adjacency
+}
+
+function enumerateExecutionPaths(
+  adjacency: ReadonlyMap<string, ExecutionFlowEdge[]>,
+  startId: string,
+  blockedIds: ReadonlySet<string> = new Set(),
+  maxDepth: number = 8,
+): ExecutionPathCandidate[] {
+  const visit = (
+    currentId: string,
+    visited: Set<string>,
+    nodeIds: string[],
+    edges: ExecutionFlowEdge[],
+  ): ExecutionPathCandidate[] => {
+    const partial = [{ nodeIds, edges }]
+    if (edges.length >= maxDepth) {
+      return partial
+    }
+
+    const candidates = (adjacency.get(currentId) ?? [])
+      .filter((edge) => !visited.has(edge.toId) && !blockedIds.has(edge.toId))
+    if (candidates.length === 0) {
+      return partial
+    }
+
+    return [
+      ...partial,
+      ...candidates.flatMap((edge) => {
+      const nextVisited = new Set(visited)
+      nextVisited.add(edge.toId)
+      return visit(edge.toId, nextVisited, [...nodeIds, edge.toId], [...edges, edge])
+      }),
+    ]
+  }
+
+  return visit(startId, new Set([startId]), [startId], [])
+}
+
+function executionPathScore(
+  path: ExecutionPathCandidate,
+  nodeById: ReadonlyMap<string, ContextPackExecutionSliceStep>,
+  question: string,
+): number {
+  const steps = path.nodeIds
+    .map((nodeId) => nodeById.get(nodeId))
+    .filter((step): step is ContextPackExecutionSliceStep => step !== undefined)
+  const observedPhases = new Set<ExecutionPhase>()
+  for (const step of steps) {
+    for (const phase of executionPhasesForStep(step)) {
+      observedPhases.add(phase)
+    }
+  }
+
+  let score = steps.reduce((total, step) => total + executionSliceStepPriority(step, question), 0)
+  if (observedPhases.has('controller')) score += 10
+  if (observedPhases.has('service')) score += 20
+  if (observedPhases.has('queue')) score += 35
+  if (observedPhases.has('worker')) score += 45
+  if (observedPhases.has('persistence')) score += 90
+  if (path.edges.some((edge) => edge.relation === 'enqueues_job')) score += 30
+
+  if (promptExpectsPersistenceStep(question) && !observedPhases.has('persistence')) {
+    score -= 120
+  }
+  if (promptWantsRuntimePipeline(question) && observedPhases.has('queue') && !observedPhases.has('worker')) {
+    score -= 60
+  }
+
+  const lastStep = steps.at(-1)
+  const lastStepPhases = lastStep ? executionPhasesForStep(lastStep) : new Set<ExecutionPhase>()
+  if (
+    promptExpectsPersistenceStep(question)
+    && observedPhases.has('worker')
+    && !observedPhases.has('persistence')
+    && lastStep
+    && !lastStepPhases.has('worker')
+    && !lastStepPhases.has('persistence')
+  ) {
+    score -= 35
+  }
+  if (lastStep && terminalBoundaryExecutionStep(lastStep)) {
+    score -= 15
+  }
+  if (lastStep && lowValueExecutionStep(lastStep)) {
+    score -= 40
+  }
+
+  return score + path.edges.length
+}
+
+function primaryPathBoundaries(
+  path: ExecutionPathCandidate,
+  nodeById: ReadonlyMap<string, ContextPackExecutionSliceStep>,
+): ContextPackExecutionSliceBoundary[] {
+  return path.edges
+    .filter((edge) => edge.relation === 'enqueues_job')
+    .map((edge) => {
+      const from = nodeById.get(edge.fromId)?.label
+      const to = nodeById.get(edge.toId)?.label
+      return {
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+        relation: edge.relation,
+      }
+    })
+}
+
+function phaseCoverageForPath(
+  steps: readonly ContextPackExecutionSliceStep[],
+  boundaries: readonly ContextPackExecutionSliceBoundary[],
+  question: string,
+): { expected: ExecutionPhase[]; observed: ExecutionPhase[]; missing: ExecutionPhase[] } {
+  const expected = expectedExecutionPhases(question)
+  const observed = new Set<ExecutionPhase>()
+  for (const step of steps) {
+    for (const phase of executionPhasesForStep(step)) {
+      observed.add(phase)
+    }
+  }
+  if (boundaries.some((boundary) => boundary.relation === 'enqueues_job')) {
+    observed.add('queue')
+    if (steps.some((step) => workerLikeExecutionStep(step))) {
+      observed.add('worker')
+    }
+  }
+  const orderedObserved = expected.filter((phase) => observed.has(phase))
+  const missing = expected.filter((phase) => !observed.has(phase))
+  return { expected, observed: orderedObserved, missing }
+}
+
+function branchBoundaryReason(
+  branchSteps: readonly ContextPackExecutionSliceStep[],
+  kind: 'side_effect' | 'terminal' | 'omitted',
+): string | undefined {
+  if (kind === 'terminal') {
+    return 'branch terminates before rejoining the primary runtime path'
+  }
+  if (kind === 'omitted') {
+    return 'low-value branch omitted from compact execution slice'
+  }
+  if (branchSteps.some((step) => lowValueExecutionStep(step))) {
+    return 'secondary branch summarized to preserve compact output'
+  }
+  return undefined
+}
+
+function classifyExecutionBranch(
+  branchSteps: readonly ContextPackExecutionSliceStep[],
+): 'side_effect' | 'terminal' | 'omitted' {
+  if (branchSteps.length === 0 || branchSteps.every((step) => lowValueExecutionStep(step))) {
+    return 'omitted'
+  }
+  if (terminalBoundaryExecutionStep(branchSteps.at(-1) ?? branchSteps[0]!)) {
+    return 'terminal'
+  }
+  return 'side_effect'
+}
+
+function collectExecutionBranches(
+  adjacency: ReadonlyMap<string, ExecutionFlowEdge[]>,
+  primaryPath: ExecutionPathCandidate,
+  nodeById: ReadonlyMap<string, ContextPackExecutionSliceStep>,
+  question: string,
+): {
+  sideEffects: ContextPackExecutionSliceBranch[]
+  terminalBoundaries: ContextPackExecutionSliceBranch[]
+  omittedBranches: ContextPackExecutionSliceOmittedBranch[]
+} {
+  const primaryEdgeKeys = new Set(primaryPath.edges.map((edge) => `${edge.fromId}:${edge.relation}:${edge.toId}`))
+  const primaryNodeIds = new Set(primaryPath.nodeIds)
+  const branchStartSeen = new Set<string>()
+  const sideEffects: ContextPackExecutionSliceBranch[] = []
+  const terminalBoundaries: ContextPackExecutionSliceBranch[] = []
+  const omittedBranches: ContextPackExecutionSliceOmittedBranch[] = []
+
+  for (const nodeId of primaryPath.nodeIds) {
+    for (const edge of adjacency.get(nodeId) ?? []) {
+      const edgeKey = `${edge.fromId}:${edge.relation}:${edge.toId}`
+      if (primaryEdgeKeys.has(edgeKey) || branchStartSeen.has(edgeKey)) {
+        continue
+      }
+      branchStartSeen.add(edgeKey)
+
+      const branchCandidates = enumerateExecutionPaths(adjacency, edge.toId, primaryNodeIds, 4)
+      const branchPath = branchCandidates.sort((left, right) =>
+        executionPathScore(right, nodeById, question) - executionPathScore(left, nodeById, question)
+      )[0] ?? { nodeIds: [edge.toId], edges: [] }
+      const branchSteps = branchPath.nodeIds
+        .map((id) => nodeById.get(id))
+        .filter((step): step is ContextPackExecutionSliceStep => step !== undefined)
+        .slice(0, 3)
+      const branchKind = classifyExecutionBranch(branchSteps)
+      const branchReason = branchBoundaryReason(branchSteps, branchKind)
+
+      if (branchKind === 'side_effect' && sideEffects.length < 3) {
+        sideEffects.push({
+          steps: branchSteps,
+          ...(branchReason ? { boundary_reason: branchReason } : {}),
+        })
+        continue
+      }
+
+      if (branchKind === 'terminal' && terminalBoundaries.length < 3) {
+        terminalBoundaries.push({
+          steps: branchSteps,
+          ...(branchReason ? { boundary_reason: branchReason } : {}),
+        })
+        continue
+      }
+
+      if (omittedBranches.length < 6) {
+        const from = nodeById.get(edge.fromId)?.label
+        const to = nodeById.get(edge.toId)?.label
+        omittedBranches.push({
+          ...(from ? { from } : {}),
+          ...(to ? { to } : {}),
+          relation: edge.relation,
+          ...(branchReason ? { reason: branchReason } : {}),
+        })
+      }
+    }
+  }
+
+  return { sideEffects, terminalBoundaries, omittedBranches }
 }
 
 function pickExecutionSliceStart(
@@ -1744,31 +2112,79 @@ function buildExecutionSlice(
     }
   }
 
-  const orderedPathIds = walkExecutionSlice(graph, startId, idSet, nodeById, question)
+  const adjacency = executionFlowAdjacency(graph, sliceMetadata, idSet, resolveNodeId)
+  const pathCandidates = enumerateExecutionPaths(adjacency, startId)
+  const primaryPathCandidates = pathCandidates.length > 0 ? pathCandidates : [{
+    nodeIds: walkExecutionSlice(graph, startId, idSet, nodeById, question),
+    edges: [] as ExecutionFlowEdge[],
+  }]
+  const primaryPath = primaryPathCandidates.sort((left, right) =>
+    executionPathScore(right, nodeById, question) - executionPathScore(left, nodeById, question)
+  )[0]!
 
-  const seen = new Set<string>()
-  const steps = orderedPathIds.flatMap((nodeId) => {
-    if (seen.has(nodeId)) {
-      return []
-    }
-    seen.add(nodeId)
-    const node = nodeById.get(nodeId)
-    return node ? [node] : []
-  })
+  const steps = primaryPath.nodeIds
+    .map((nodeId) => nodeById.get(nodeId))
+    .filter((step): step is ContextPackExecutionSliceStep => step !== undefined)
+  const boundaries = primaryPathBoundaries(primaryPath, nodeById)
+  const phaseCoverage = phaseCoverageForPath(steps, boundaries, question)
+  const missingPhase = phaseCoverage.missing[0]
+  const boundaryReason = missingPhase ? missingExecutionPhaseBoundaryReason(missingPhase) : undefined
+  const branches = collectExecutionBranches(adjacency, primaryPath, nodeById, question)
 
-  const expectsPersistence = promptExpectsPersistenceStep(question)
-  const reachedPersistence = steps.some((step) => persistenceLikeExecutionStep(step))
+  return {
+    status: missingPhase ? 'partial' : 'complete',
+    ...(boundaryReason ? { boundary_reason: boundaryReason } : {}),
+    steps,
+    primary_path: {
+    steps,
+    ...(boundaries.length > 0 ? { boundaries } : {}),
+    ...(boundaryReason ? { boundary_reason: boundaryReason } : {}),
+    },
+    ...(branches.sideEffects.length > 0 ? { side_effects: branches.sideEffects } : {}),
+    ...(branches.terminalBoundaries.length > 0 ? { terminal_boundaries: branches.terminalBoundaries } : {}),
+    ...(branches.omittedBranches.length > 0 ? { omitted_branches: branches.omittedBranches } : {}),
+    phase_coverage: phaseCoverage,
+  }
+}
 
-  return expectsPersistence && !reachedPersistence
-    ? {
-        status: 'partial',
-        boundary_reason: 'slice stops before expected persistence step',
-        steps,
-      }
-    : {
-        status: 'complete',
-        steps,
-      }
+function compactExecutionSliceStep(step: ContextPackExecutionSliceStep): ContextPackExecutionSliceStep {
+  return {
+    label: step.label,
+    source_file: basename(step.source_file),
+    line_number: step.line_number,
+  }
+}
+
+function compactExecutionSliceBranch(branch: ContextPackExecutionSliceBranch): ContextPackExecutionSliceBranch {
+  return {
+    steps: branch.steps.map(compactExecutionSliceStep),
+    ...(branch.boundary_reason ? { boundary_reason: branch.boundary_reason } : {}),
+  }
+}
+
+function compactExecutionSlice(executionSlice: ContextPackExecutionSlice | undefined): ContextPackExecutionSlice | undefined {
+  if (!executionSlice) {
+    return undefined
+  }
+
+  return {
+    status: executionSlice.status,
+    ...(executionSlice.boundary_reason ? { boundary_reason: executionSlice.boundary_reason } : {}),
+    steps: executionSlice.steps.map(compactExecutionSliceStep),
+    ...(executionSlice.primary_path
+      ? {
+          primary_path: {
+            steps: executionSlice.primary_path.steps.map(compactExecutionSliceStep),
+            ...(executionSlice.primary_path.boundaries ? { boundaries: executionSlice.primary_path.boundaries } : {}),
+            ...(executionSlice.primary_path.boundary_reason ? { boundary_reason: executionSlice.primary_path.boundary_reason } : {}),
+          },
+        }
+      : {}),
+    ...(executionSlice.side_effects ? { side_effects: executionSlice.side_effects.map(compactExecutionSliceBranch) } : {}),
+    ...(executionSlice.terminal_boundaries ? { terminal_boundaries: executionSlice.terminal_boundaries.map(compactExecutionSliceBranch) } : {}),
+    ...(executionSlice.omitted_branches ? { omitted_branches: executionSlice.omitted_branches } : {}),
+    ...(executionSlice.phase_coverage ? { phase_coverage: executionSlice.phase_coverage } : {}),
+  }
 }
 
 function buildFrameworkQuestionProfile(question: string, questionTokens: readonly string[]): FrameworkQuestionProfile {
@@ -3177,7 +3593,7 @@ export function compactRetrieveResult(result: RetrieveResult): CompactRetrieveRe
   const compactFrameworkLimit =
     frameworkProfile.frameworkShaped && result.matched_nodes.some((node) => (node.framework_boost ?? 0) > 0) ? 5 : Number.POSITIVE_INFINITY
   const fullPack = contextPackFromRetrieveResult(result)
-  const executionSlice = result.execution_slice
+  const executionSlice = compactExecutionSlice(result.execution_slice)
   const promotedSliceNodeIds = promotedSliceCompactNodeIds(result)
   const compactPack = promotedSliceNodeIds.length > 0
     ? compactContextPack(fullPack, {

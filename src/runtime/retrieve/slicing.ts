@@ -189,6 +189,22 @@ function effectivePolicy(
     }
   }
 
+  if (broadRuntimeGeneration && pipelinePrompt) {
+    return {
+      ...base,
+      backward_relations: new Set(['controller_route', 'route_handler', 'method']),
+      forward_relations: new Set([...base.forward_relations, ...RUNTIME_FLOW_RELATIONS]),
+      helper_relations: new Set([
+        ...base.helper_relations,
+        'injects',
+        'depends_on',
+        'module_provides',
+      ]),
+      backward_depth: 1,
+      forward_depth: Math.max(base.forward_depth, 5),
+    }
+  }
+
   if (hasExactMethodAnchor && pipelinePrompt) {
     return {
       ...base,
