@@ -6,6 +6,7 @@ const FIXTURE_ROOT = join(process.cwd(), 'tests', 'fixtures', 'go-semantic-works
 const FIXTURE_FILES = [
   join(FIXTURE_ROOT, 'cmd', 'api', 'main.go'),
   join(FIXTURE_ROOT, 'cmd', 'chi', 'main.go'),
+  join(FIXTURE_ROOT, 'internal', 'handlers', 'user_handler_multiline.go'),
   join(FIXTURE_ROOT, 'internal', 'handlers', 'user_handler.go'),
   join(FIXTURE_ROOT, 'internal', 'service', 'user_service.go'),
   join(FIXTURE_ROOT, 'internal', 'service', 'user_service_validation.go'),
@@ -23,6 +24,7 @@ describe('Go semantic extraction', () => {
     const chiRouter = result.nodes.find((node) => node.framework_role === 'chi_router' && node.route_path === '/chi')
     const listUsers = result.nodes.find((node) => node.label === '.ListUsers()')
     const createUser = result.nodes.find((node) => node.label === '.CreateUser()')
+    const createUserMultiline = result.nodes.find((node) => node.label === '.CreateUserMultiline()')
     const listService = result.nodes.find(
       (node) => node.label === '.List()' && node.source_file === join(FIXTURE_ROOT, 'internal', 'service', 'user_service.go'),
     )
@@ -92,6 +94,11 @@ describe('Go semantic extraction', () => {
         node_kind: 'method',
       }),
     )
+    expect(createUserMultiline).toEqual(
+      expect.objectContaining({
+        node_kind: 'method',
+      }),
+    )
 
     expect(result.edges).toEqual(
       expect.arrayContaining([
@@ -105,6 +112,7 @@ describe('Go semantic extraction', () => {
         expect.objectContaining({ source: listUsers?.id, target: chiRoutedRoute?.id, relation: 'handles_route' }),
         expect.objectContaining({ source: listUsers?.id, target: listService?.id, relation: 'calls' }),
         expect.objectContaining({ source: createUser?.id, target: createService?.id, relation: 'calls' }),
+        expect.objectContaining({ source: createUserMultiline?.id, target: createService?.id, relation: 'calls' }),
         expect.objectContaining({ source: createService?.id, target: validateService?.id, relation: 'calls' }),
         expect.objectContaining({ source: createService?.id, target: insertRepository?.id, relation: 'calls' }),
       ]),

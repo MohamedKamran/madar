@@ -491,6 +491,10 @@ function analyzeGoFunctions(
 
     let braceDepth = braceDelta(signature)
     let cursor = indexLine + 1
+    while (cursor < lines.length && braceDepth <= 0 && !signature.includes('{')) {
+      braceDepth += braceDelta(lines[cursor] ?? '')
+      cursor += 1
+    }
     while (cursor < lines.length && braceDepth > 0) {
       braceDepth += braceDelta(lines[cursor] ?? '')
       cursor += 1
