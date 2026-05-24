@@ -149,13 +149,31 @@ function extractHookCommand(settingsJson: string, eventName: string): string {
   return parsed.hooks?.[eventName]?.[0]?.hooks?.[0]?.command ?? ''
 }
 
+function shellCommandForPlatform(
+  platform: NodeJS.Platform,
+  command: string,
+): { command: string; args: string[] } {
+  if (platform === 'win32') {
+    return {
+      command: process.env.ComSpec ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', command],
+    }
+  }
+
+  return {
+    command: '/bin/sh',
+    args: ['-lc', command],
+  }
+}
+
 function runHookCommand(
   command: string,
   cwd: string,
   input: Record<string, unknown>,
   env: Record<string, string> = {},
 ): string {
-  const result = spawnSync('/bin/sh', ['-lc', command], {
+  const shell = shellCommandForPlatform(process.platform, command)
+  const result = spawnSync(shell.command, shell.args, {
     cwd,
     input: JSON.stringify(input),
     encoding: 'utf8',
@@ -170,6 +188,17 @@ function runHookCommand(
 }
 
 describe('install helpers', () => {
+  it('chooses a platform-appropriate shell for generated hook commands', () => {
+    expect(shellCommandForPlatform('darwin', 'node -e "console.log(1)"')).toEqual({
+      command: '/bin/sh',
+      args: ['-lc', 'node -e "console.log(1)"'],
+    })
+    expect(shellCommandForPlatform('win32', 'node -e "console.log(1)"')).toEqual({
+      command: process.env.ComSpec ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', 'node -e "console.log(1)"'],
+    })
+  })
+
   it('chooses the default platform from the host OS', () => {
     expect(defaultInstallPlatform('win32')).toBe('windows')
     expect(defaultInstallPlatform('darwin')).toBe('claude')
