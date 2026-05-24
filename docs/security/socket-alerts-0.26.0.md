@@ -23,7 +23,11 @@ Commands used during triage:
 
 ## Direct production dependencies
 
-| Package | Version | Notes |
+The table below records the resolved versions installed in the reviewed production
+tree (`package-lock.json` / `node_modules`), not the semver ranges declared in
+`package.json`.
+
+| Package | Installed version | Notes |
 | --- | --- | --- |
 | `@huggingface/transformers` | `4.2.0` | Direct dependency; lazy-loaded only from the semantic retrieval path |
 | `@vscode/tree-sitter-wasm` | `0.3.1` | Parser/grammar support |
@@ -79,4 +83,3 @@ That means normal lexical retrieval does **not** load the transformer/onnx/image
 - optional `sharp` platform binaries bring the LGPL alerts that corporate scanners will keep flagging
 
 Tracked in: **#290 — Make semantic runtime dependencies optional**
-
