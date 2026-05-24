@@ -1,9 +1,24 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { KnowledgeGraph } from '../../src/contracts/graph.js'
 import { runContextPackCommand, type ContextPackCommandDependencies } from '../../src/infrastructure/context-pack-command.js'
 import { build } from '../../src/pipeline/build.js'
 import { compactRetrieveResult, retrieveContext } from '../../src/runtime/retrieve.js'
+
+const tempFixtureRoots: string[] = []
+
+afterEach(() => {
+  while (tempFixtureRoots.length > 0) {
+    const root = tempFixtureRoots.pop()
+    if (root) {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
 
 function buildRuntimeGenerationGraph() {
   return build(
@@ -36,7 +51,17 @@ function buildRuntimeGenerationGraph() {
 }
 
 function buildImplementationPackGraph() {
-  const root = process.cwd()
+  const root = mkdtempSync(join(tmpdir(), 'madar-fixture-'))
+  tempFixtureRoots.push(root)
+  writeFileSync(join(root, 'package.json'), JSON.stringify({
+    name: 'madar-fixture',
+    private: true,
+    scripts: {
+      typecheck: 'tsc --noEmit',
+      build: 'tsc -p tsconfig.build.json',
+      'test:run': 'vitest run',
+    },
+  }))
   const graph = build(
     [
       {
@@ -53,6 +78,7 @@ function buildImplementationPackGraph() {
           { id: 'retrieve_test', label: 'retrieve-slice-v1.test', file_type: 'code', source_file: `${root}/tests/unit/retrieve-slice-v1.test.ts`, source_location: 'L1', node_kind: 'function', community: 3 },
           { id: 'gate_test', label: 'retrieval-gate.test', file_type: 'code', source_file: `${root}/tests/unit/retrieval-gate.test.ts`, source_location: 'L1', node_kind: 'function', community: 3 },
           { id: 'prompt_pattern', label: 'runContextPromptCommand', file_type: 'code', source_file: `${root}/src/infrastructure/context-prompt-command.ts`, source_location: 'L1', node_kind: 'function', community: 4 },
+          { id: 'review_template_pattern', label: 'renderReviewTemplate', file_type: 'code', source_file: `${root}/src/infrastructure/review-template.ts`, source_location: 'L10', node_kind: 'function', community: 4 },
         ],
         edges: [
           { source: 'pack_parser', target: 'pack_command', relation: 'calls', confidence: 'EXTRACTED', source_file: `${root}/src/cli/parser.ts` },
@@ -65,6 +91,7 @@ function buildImplementationPackGraph() {
           { source: 'retrieve_context', target: 'gate_test', relation: 'covered_by', confidence: 'EXTRACTED', source_file: `${root}/src/runtime/retrieve.ts` },
           { source: 'pack_command', target: 'pack_test', relation: 'covered_by', confidence: 'EXTRACTED', source_file: `${root}/src/infrastructure/context-pack-command.ts` },
           { source: 'pack_command', target: 'prompt_pattern', relation: 'related_to', confidence: 'EXTRACTED', source_file: `${root}/src/infrastructure/context-pack-command.ts` },
+          { source: 'pack_command', target: 'review_template_pattern', relation: 'related_to', confidence: 'EXTRACTED', source_file: `${root}/src/infrastructure/context-pack-command.ts` },
         ],
       },
     ],
