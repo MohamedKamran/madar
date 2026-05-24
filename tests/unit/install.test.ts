@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import * as ts from 'typescript'
 
 import {
@@ -152,11 +152,16 @@ function extractHookCommand(settingsJson: string, eventName: string): string {
 function shellCommandForPlatform(
   platform: NodeJS.Platform,
   command: string,
-): { command: string; args: string[] } {
+): { command: string; args: string[]; cleanupPath?: string } {
   if (platform === 'win32') {
+    const scriptDir = mkdtempSync(join(tmpdir(), 'madar-hook-'))
+    const scriptPath = join(scriptDir, 'run-hook.cmd')
+    writeFileSync(scriptPath, `@echo off\r\n${command}\r\n`, 'utf8')
+
     return {
       command: process.env.ComSpec ?? 'cmd.exe',
-      args: ['/d', '/s', '/c', command],
+      args: ['/d', '/s', '/c', scriptPath],
+      cleanupPath: scriptPath,
     }
   }
 
@@ -173,18 +178,25 @@ function runHookCommand(
   env: Record<string, string> = {},
 ): string {
   const shell = shellCommandForPlatform(process.platform, command)
-  const result = spawnSync(shell.command, shell.args, {
-    cwd,
-    input: JSON.stringify(input),
-    encoding: 'utf8',
-    env: { ...process.env, ...env },
-  })
+  try {
+    const result = spawnSync(shell.command, shell.args, {
+      cwd,
+      input: JSON.stringify(input),
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    })
 
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `hook command failed with exit code ${result.status ?? 'unknown'}`)
+    if (result.status !== 0) {
+      throw new Error(result.stderr || `hook command failed with exit code ${result.status ?? 'unknown'}`)
+    }
+
+    return result.stdout
+  } finally {
+    if (shell.cleanupPath) {
+      rmSync(shell.cleanupPath, { force: true })
+      rmSync(dirname(shell.cleanupPath), { recursive: true, force: true })
+    }
   }
-
-  return result.stdout
 }
 
 describe('install helpers', () => {
@@ -193,10 +205,30 @@ describe('install helpers', () => {
       command: '/bin/sh',
       args: ['-lc', 'node -e "console.log(1)"'],
     })
-    expect(shellCommandForPlatform('win32', 'node -e "console.log(1)"')).toEqual({
-      command: process.env.ComSpec ?? 'cmd.exe',
-      args: ['/d', '/s', '/c', 'node -e "console.log(1)"'],
-    })
+  })
+
+  it('wraps Windows hook commands in a cmd script to avoid command-length limits', () => {
+    const longCommand = `node -e "${'console.log(1);'.repeat(1200)}"`
+    const shell = shellCommandForPlatform('win32', longCommand)
+
+    try {
+      expect(shell.command).toBe(process.env.ComSpec ?? 'cmd.exe')
+      expect(shell.args.slice(0, 3)).toEqual(['/d', '/s', '/c'])
+      const scriptPath = shell.args[3]
+      expect(scriptPath).toBeDefined()
+      if (!scriptPath) {
+        throw new Error('missing Windows hook script path')
+      }
+
+      expect(scriptPath).toMatch(/\.cmd$/i)
+      expect(scriptPath).not.toContain('console.log(1);')
+      expect(readFileSync(scriptPath, 'utf8')).toContain(longCommand)
+    } finally {
+      const scriptPath = shell.args[3]
+      if (scriptPath) {
+        rmSync(scriptPath, { force: true })
+      }
+    }
   })
 
   it('chooses the default platform from the host OS', () => {
