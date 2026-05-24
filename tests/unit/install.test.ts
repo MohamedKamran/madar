@@ -227,6 +227,7 @@ describe('install helpers', () => {
       const scriptPath = shell.args[3]
       if (scriptPath) {
         rmSync(scriptPath, { force: true })
+        rmSync(dirname(scriptPath), { recursive: true, force: true })
       }
     }
   })
