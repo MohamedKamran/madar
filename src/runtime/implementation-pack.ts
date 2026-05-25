@@ -138,6 +138,14 @@ function createImplementationPackFileHint(
   }
 }
 
+function helperLikeFileContext(
+  path: string,
+  labelOrSymbols: readonly string[],
+  reason?: string,
+): boolean {
+  return HELPER_PATTERN.test([path, ...labelOrSymbols, reason ?? ''].join(' '))
+}
+
 function addRankedFileCandidate(
   target: Map<string, RankedFileAccumulator>,
   path: string,
@@ -554,6 +562,8 @@ function mergeLikelyEditFiles(
 ): ImplementationPackFileHint[] {
   const results: ImplementationPackFileHint[] = []
   const seen = new Set<string>()
+  const hasNonHelperWorkflowCenter = workflowCentersValue.some((center) => center.path
+    && !helperLikeFileContext(center.path, [center.label, ...(center.matched_symbols ?? [])], center.reason))
   const starterByPath = new Map(
     starterFiles
       .filter((entry) => allowTestFiles || classifySourceDomain(entry.path, rootPath) !== 'test')
@@ -565,6 +575,7 @@ function mergeLikelyEditFiles(
       !center.path
       || seen.has(center.path)
       || (!allowTestFiles && classifySourceDomain(center.path, rootPath) === 'test')
+      || (hasNonHelperWorkflowCenter && helperLikeFileContext(center.path, [center.label, ...(center.matched_symbols ?? [])], center.reason))
     ) {
       continue
     }
@@ -587,7 +598,11 @@ function mergeLikelyEditFiles(
   }
 
   for (const entry of starterFiles) {
-    if (seen.has(entry.path) || (!allowTestFiles && classifySourceDomain(entry.path, rootPath) === 'test')) {
+    if (
+      seen.has(entry.path)
+      || (!allowTestFiles && classifySourceDomain(entry.path, rootPath) === 'test')
+      || (hasNonHelperWorkflowCenter && helperLikeFileContext(entry.path, entry.matched_symbols, entry.reason))
+    ) {
       continue
     }
     results.push(entry)
