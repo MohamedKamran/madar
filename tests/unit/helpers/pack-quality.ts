@@ -87,14 +87,46 @@ function copyFixtureWorkspace(name: string, tempDir: string): string {
 function loadPackQualityFixture(name: string): PackQualityFixtureManifest {
   const manifestPath = fixtureManifestPath(name)
   const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<PackQualityFixtureManifest>
+  const requiredArrayFields = [
+    'expected_workflow_centers',
+    'expected_likely_edit_files',
+    'expected_likely_test_files',
+    'expected_validation_commands',
+    'expected_negative_guidance',
+  ] as const
+  const problems: string[] = []
+
+  if (typeof parsed.prompt !== 'string' || parsed.prompt.trim().length === 0) {
+    problems.push('"prompt" must be a non-empty string')
+  }
+  if ('budget' in parsed && parsed.budget !== undefined && typeof parsed.budget !== 'number') {
+    problems.push('"budget" must be a number when provided')
+  }
+  for (const field of requiredArrayFields) {
+    if (!Array.isArray(parsed[field])) {
+      problems.push(`"${field}" must be an array`)
+    }
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Invalid fixture manifest at ${manifestPath}: ${problems.join('; ')}`)
+  }
+
+  const prompt = parsed.prompt as string
+  const expectedWorkflowCenters = parsed.expected_workflow_centers as string[]
+  const expectedLikelyEditFiles = parsed.expected_likely_edit_files as string[]
+  const expectedLikelyTestFiles = parsed.expected_likely_test_files as string[]
+  const expectedValidationCommands = parsed.expected_validation_commands as string[]
+  const expectedNegativeGuidance = parsed.expected_negative_guidance as string[]
+
   return {
-    prompt: parsed.prompt ?? '',
+    prompt,
     ...(typeof parsed.budget === 'number' ? { budget: parsed.budget } : {}),
-    expected_workflow_centers: parsed.expected_workflow_centers ?? [],
-    expected_likely_edit_files: parsed.expected_likely_edit_files ?? [],
-    expected_likely_test_files: parsed.expected_likely_test_files ?? [],
-    expected_validation_commands: parsed.expected_validation_commands ?? [],
-    expected_negative_guidance: parsed.expected_negative_guidance ?? [],
+    expected_workflow_centers: expectedWorkflowCenters,
+    expected_likely_edit_files: expectedLikelyEditFiles,
+    expected_likely_test_files: expectedLikelyTestFiles,
+    expected_validation_commands: expectedValidationCommands,
+    expected_negative_guidance: expectedNegativeGuidance,
   }
 }
 

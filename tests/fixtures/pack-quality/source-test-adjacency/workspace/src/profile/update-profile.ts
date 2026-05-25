@@ -1,7 +1,8 @@
 export function updateProfile(input: { displayName: string }) {
-  if (!input.displayName.trim()) {
+  const displayName = input.displayName.trim()
+  if (!displayName) {
     throw new Error('displayName is required')
   }
 
-  return input
+  return { ...input, displayName }
 }

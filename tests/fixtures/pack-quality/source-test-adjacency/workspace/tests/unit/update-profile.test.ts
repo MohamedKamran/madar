@@ -6,4 +6,8 @@ describe('updateProfile', () => {
   it('keeps source and test adjacency obvious', () => {
     expect(updateProfile({ displayName: 'Sam' })).toEqual({ displayName: 'Sam' })
   })
+
+  it('returns a trimmed displayName after validation', () => {
+    expect(updateProfile({ displayName: '  Sam  ' })).toEqual({ displayName: 'Sam' })
+  })
 })

@@ -9,4 +9,8 @@ describe('createUserRoute', () => {
       displayName: 'Sam',
     })
   })
+
+  it('throws when displayName is missing', () => {
+    expect(() => createUserRoute({ email: 'sam@example.test', displayName: '' })).toThrow('displayName is required')
+  })
 })

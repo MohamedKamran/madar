@@ -6,4 +6,8 @@ describe('parseSyncArgs', () => {
   it('passes the dry run flag into the sync command', () => {
     expect(parseSyncArgs(['--dry-run'])).toEqual({ dryRun: true })
   })
+
+  it('keeps dry run disabled when flag is absent', () => {
+    expect(parseSyncArgs([])).toEqual({ dryRun: false })
+  })
 })
