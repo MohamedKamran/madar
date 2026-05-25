@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { listPackQualityFixtures, runPackQualityFixture } from './helpers/pack-quality.js'
 
-const EXPECTED_FIXTURES = [
+const EXPECTED_IMPLEMENT_FIXTURES = [
   'controller-service-test-flow',
   'queue-job-retry-workflow',
   'cli-command-implementation',
@@ -13,12 +13,21 @@ const EXPECTED_FIXTURES = [
   'indirect-seed-workflow-owner',
 ] as const
 
+const EXPECTED_EXPLAIN_FIXTURES = [
+  'runtime-generation-explain-report-flow',
+] as const
+
+const EXPECTED_FIXTURES = [
+  ...EXPECTED_IMPLEMENT_FIXTURES,
+  ...EXPECTED_EXPLAIN_FIXTURES,
+] as const
+
 describe('pack-quality fixtures (#298)', () => {
   it('ships all listed pack-quality fixture categories', () => {
     expect(listPackQualityFixtures()).toEqual(EXPECTED_FIXTURES)
   })
 
-  for (const fixtureName of EXPECTED_FIXTURES) {
+  for (const fixtureName of EXPECTED_IMPLEMENT_FIXTURES) {
     it(`generates a deterministic implement pack for ${fixtureName}`, async () => {
       const result = await runPackQualityFixture(fixtureName)
 
@@ -53,4 +62,80 @@ describe('pack-quality fixtures (#298)', () => {
       }
     })
   }
+
+  it('generates a deterministic explain pack for runtime-generation-explain-report-flow', async () => {
+    const result = await runPackQualityFixture('runtime-generation-explain-report-flow')
+    const payload = result.payload as typeof result.payload & {
+      recommended_first_read?: Array<{ path?: string }>
+      pack?: {
+        execution_slice?: {
+          steps?: Array<{ label?: string }>
+          phase_coverage?: {
+            expected?: string[]
+            observed?: string[]
+            missing?: string[]
+          }
+        }
+        matched_nodes?: Array<{ label?: string }>
+      }
+    }
+
+    expect(payload.workflow_centers?.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([
+        'src/modules/ideas/interface/http/idea-generation.controller.ts',
+        'src/modules/pipeline/api/pipeline-trigger.service.ts',
+        'src/modules/pipeline/api/queue-registry.service.ts',
+        'src/modules/pipeline/workers/orchestrator.worker.ts',
+      ]),
+    )
+    expect(payload.recommended_first_read?.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining([
+        'src/modules/ideas/interface/http/idea-generation.controller.ts',
+        'src/modules/pipeline/api/pipeline-trigger.service.ts',
+        'src/modules/pipeline/api/queue-registry.service.ts',
+      ]),
+    )
+    expect(payload.recommended_first_read?.map((entry) => entry.path)).not.toEqual(
+      expect.arrayContaining([
+        'src/modules/ideas/application/helpers/idea-report-status-message.helper.ts',
+        'src/modules/ideas/application/helpers/idea-report-suggested-next-steps.helper.ts',
+      ]),
+    )
+    expect(payload.negative_guidance).toEqual(expect.arrayContaining([
+      expect.stringContaining('idea-report-status-message.helper.ts'),
+      expect.stringContaining('idea-report-suggested-next-steps.helper.ts'),
+    ]))
+    expect(payload.pack?.execution_slice?.steps?.map((entry) => entry.label)).toEqual(
+      expect.arrayContaining([
+        '.generateFromProblem()',
+        'startIdeaReportPipeline()',
+        'enqueueIdeaReportJob()',
+        '.process()',
+        'saveStructuredReport()',
+      ]),
+    )
+    expect(payload.pack?.execution_slice?.phase_coverage).toEqual(expect.objectContaining({
+      expected: expect.arrayContaining([
+        'planner',
+        'external_research_or_api',
+        'report_builder',
+        'persistence',
+      ]),
+      observed: expect.arrayContaining([
+        'planner',
+        'external_research_or_api',
+        'report_builder',
+        'persistence',
+      ]),
+      missing: [],
+    }))
+    expect(payload.pack?.matched_nodes?.map((entry) => entry.label)).toEqual(
+      expect.arrayContaining([
+        'planIdeaReport()',
+        'processIdeaReportSection()',
+        'assembleIdeaReport()',
+        'saveStructuredReport()',
+      ]),
+    )
+  })
 })
