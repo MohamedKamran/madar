@@ -553,7 +553,8 @@ describe('install helpers', () => {
       })
 
       expect(output).toContain('retrieve')
-      expect(output).toContain('3x fewer turns')
+      expect(output).not.toContain('3x fewer turns')
+      expect(output).not.toContain('2.8x faster')
     })
   })
 
