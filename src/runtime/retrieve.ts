@@ -2273,7 +2273,13 @@ function executionFlowAdjacency(
   resolveNodeId: (nodeId: string | undefined, label: string) => string | undefined,
 ): Map<string, ExecutionFlowEdge[]> {
   const adjacency = new Map<string, ExecutionFlowEdge[]>()
+  const seenEdges = new Set<string>()
   const record = (edge: ExecutionFlowEdge): void => {
+    const edgeKey = `${edge.fromId}:${edge.relation}:${edge.toId}`
+    if (seenEdges.has(edgeKey)) {
+      return
+    }
+    seenEdges.add(edgeKey)
     const current = adjacency.get(edge.fromId) ?? []
     current.push(edge)
     adjacency.set(edge.fromId, current)
@@ -2316,10 +2322,6 @@ function executionFlowAdjacency(
       }
     }
     }
-  }
-
-  if (adjacency.size > 0) {
-    return adjacency
   }
 
   for (const fromId of idSet) {
@@ -2448,10 +2450,13 @@ function phaseCoverageForPath(
   boundaries: readonly ContextPackExecutionSliceBoundary[],
   question: string,
   scopeSteps: readonly ContextPackExecutionSliceStep[] = steps,
+  tracedSteps: readonly ContextPackExecutionSliceStep[] = steps,
 ): { expected: ExecutionPhase[]; observed: ExecutionPhase[]; missing: ExecutionPhase[] } {
   const phaseOrder = executionPhaseOrder(question)
-  const observedSourceSteps = promptUsesExpandedExecutionTaxonomy(question) ? scopeSteps : steps
-  const expected = expectedExecutionPhases(question, observedSourceSteps)
+  const expandedTaxonomy = promptUsesExpandedExecutionTaxonomy(question)
+  const expectedSourceSteps = expandedTaxonomy ? scopeSteps : steps
+  const observedSourceSteps = expandedTaxonomy ? tracedSteps : steps
+  const expected = expectedExecutionPhases(question, expectedSourceSteps)
   const observed = new Set<ExecutionPhase>()
   for (const step of observedSourceSteps) {
     for (const phase of executionPhasesForStep(step)) {
@@ -2510,6 +2515,7 @@ function collectExecutionBranches(
   sideEffects: ContextPackExecutionSliceBranch[]
   terminalBoundaries: ContextPackExecutionSliceBranch[]
   omittedBranches: ContextPackExecutionSliceOmittedBranch[]
+  omittedEvidenceSteps: ContextPackExecutionSliceStep[]
 } {
   const primaryEdgeKeys = new Set(primaryPath.edges.map((edge) => `${edge.fromId}:${edge.relation}:${edge.toId}`))
   const primaryNodeIds = new Set(primaryPath.nodeIds)
@@ -2517,6 +2523,7 @@ function collectExecutionBranches(
   const sideEffects: ContextPackExecutionSliceBranch[] = []
   const terminalBoundaries: ContextPackExecutionSliceBranch[] = []
   const omittedBranches: ContextPackExecutionSliceOmittedBranch[] = []
+  const omittedEvidenceSteps: ContextPackExecutionSliceStep[] = []
 
   for (const nodeId of primaryPath.nodeIds) {
     for (const edge of adjacency.get(nodeId) ?? []) {
@@ -2554,6 +2561,7 @@ function collectExecutionBranches(
       }
 
       if (omittedBranches.length < 6) {
+        omittedEvidenceSteps.push(...branchSteps)
         const from = nodeById.get(edge.fromId)?.label
         const to = nodeById.get(edge.toId)?.label
         omittedBranches.push({
@@ -2566,7 +2574,7 @@ function collectExecutionBranches(
     }
   }
 
-  return { sideEffects, terminalBoundaries, omittedBranches }
+  return { sideEffects, terminalBoundaries, omittedBranches, omittedEvidenceSteps }
 }
 
 function pickExecutionSliceStart(
@@ -2881,10 +2889,16 @@ function buildExecutionSlice(
   const scopeSteps = orderedIds
     .map((nodeId) => nodeById.get(nodeId))
     .filter((step): step is ContextPackExecutionSliceStep => step !== undefined)
-  const phaseCoverage = phaseCoverageForPath(steps, boundaries, question, scopeSteps)
+  const branches = collectExecutionBranches(adjacency, primaryPath, nodeById, question)
+  const tracedSteps = [
+    ...steps,
+    ...branches.sideEffects.flatMap((branch) => branch.steps),
+    ...branches.terminalBoundaries.flatMap((branch) => branch.steps),
+    ...branches.omittedEvidenceSteps,
+  ]
+  const phaseCoverage = phaseCoverageForPath(steps, boundaries, question, scopeSteps, tracedSteps)
   const missingPhase = phaseCoverage.missing[0]
   const boundaryReason = missingPhase ? missingExecutionPhaseBoundaryReason(missingPhase) : undefined
-  const branches = collectExecutionBranches(adjacency, primaryPath, nodeById, question)
   const executionSlice: ContextPackExecutionSlice = {
     status: missingPhase ? 'partial' : 'complete',
     ...(boundaryReason ? { boundary_reason: boundaryReason } : {}),
