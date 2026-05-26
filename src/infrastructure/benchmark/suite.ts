@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -495,7 +495,12 @@ function copyReportArtifacts(
   const copiedRoot = join(destinationParent, basename(report.paths.output_dir))
   mkdirSync(dirname(copiedRoot), { recursive: true })
   cpSync(report.paths.output_dir, copiedRoot, { recursive: true })
-  return join(copiedRoot, 'report.share-safe.json')
+  const copiedShareSafeReport = join(copiedRoot, 'report.share-safe.json')
+  if (!existsSync(copiedShareSafeReport)) {
+    throw new Error(`Missing share-safe report in copied benchmark artifacts: ${copiedShareSafeReport}`)
+  }
+  writeFileSync(join(copiedRoot, 'report.json'), readFileSync(copiedShareSafeReport, 'utf8'), 'utf8')
+  return copiedShareSafeReport
 }
 
 export async function runBenchmarkSuite(

@@ -1,7 +1,7 @@
 {
   "baseline_mode": "native_agent",
   "question": "How does login session creation flow work from controller to persistence?",
-  "graph_path": "../../../../../../../../private/var/folders/n1/l0_t90js31d0yyhbxfvgfgzr0000gn/T/madar-bench-suite-nestjs-mid-3rfNit/spi/out/graph.json",
+  "graph_path": "<project-root>/out/graph.json",
   "exec_command": {
     "command": null,
     "placeholders": [
@@ -48,7 +48,7 @@
     "total_cost_usd": 0.39934975,
     "num_turns": 6,
     "duration_ms": 28006,
-    "result_path": "/Users/mohammednaji/Desktop/projects/works/madar/.worktrees/issue-332-benchmark-suite/out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/baseline-answer.txt"
+    "result_path": "<artifact-root>/baseline-answer.txt"
   },
   "madar": {
     "kind": "succeeded",
@@ -89,7 +89,7 @@
     "total_cost_usd": 0.4476175,
     "num_turns": 7,
     "duration_ms": 34803,
-    "result_path": "/Users/mohammednaji/Desktop/projects/works/madar/.worktrees/issue-332-benchmark-suite/out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/madar-answer.txt"
+    "result_path": "<artifact-root>/madar-answer.txt"
   },
   "reductions": {
     "input_tokens": 0.85,
@@ -126,11 +126,11 @@
   "started_at": "2026-05-26T18:45:15.518Z",
   "completed_at": "2026-05-26T18:46:24.823Z",
   "paths": {
-    "output_dir": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15",
-    "report": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/report.json",
-    "share_safe_report": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/report.share-safe.json",
-    "baseline_answer": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/baseline-answer.txt",
-    "madar_answer": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/madar-answer.txt",
-    "prompt_file": "out/benchmark-suite-staging/2026-05-26T18-31-04/nestjs-mid/explain-runtime/warm-cache/spi/trial-003/2026-05-26T18-45-15/native_agent-prompt.txt"
+    "output_dir": "<artifact-root>",
+    "report": "<artifact-root>/report.json",
+    "share_safe_report": "<artifact-root>/report.share-safe.json",
+    "baseline_answer": "<artifact-root>/baseline-answer.txt",
+    "madar_answer": "<artifact-root>/madar-answer.txt",
+    "prompt_file": "<artifact-root>/native_agent-prompt.txt"
   }
 }
