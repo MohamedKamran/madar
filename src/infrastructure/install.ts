@@ -173,8 +173,18 @@ function isMadarCodexHookCommand(command: string): boolean {
 }
 
 function isMadarProjectHookPayload(payload: string): boolean {
-  return payload.includes('"additionalContext"')
-    && (payload.includes(RETRIEVE_FIRST_MESSAGE) || payload.includes(STRICT_CONTEXT_PACK_MESSAGE))
+  if (!payload.includes('"additionalContext"')) {
+    return false
+  }
+
+  const retrieveFirstSignature =
+    payload.includes('STOP. This project has a madar knowledge graph.')
+    && payload.includes('Do not use Glob, Grep, Bash, Read, or Agent tools first.')
+  const strictSignature =
+    payload.includes('strict compact MCP')
+    && payload.includes('context_pack')
+
+  return retrieveFirstSignature || strictSignature
 }
 
 function isMadarProjectHookCommand(command: string): boolean {
