@@ -100,6 +100,12 @@ describe('pack-quality fixtures (#298)', () => {
         'src/modules/pipeline/api/queue-registry.service.ts',
       ]),
     )
+    expect(payload.confidence_score).toEqual(expect.any(Number))
+    expect(payload.confidence_score).toBeGreaterThanOrEqual(0)
+    expect(payload.confidence_score).toBeLessThanOrEqual(1)
+    expect(payload.pack?.confidence_score).toEqual(expect.any(Number))
+    expect(payload.pack?.confidence_score).toBeGreaterThanOrEqual(0)
+    expect(payload.pack?.confidence_score).toBeLessThanOrEqual(1)
     expect(payload.pack?.confidence_score).toBe(payload.confidence_score)
     expect(payload.pack?.workflow_centers?.map((entry) => entry.path)).toEqual(payload.workflow_centers?.map((entry) => entry.path))
     expect(payload.pack?.recommended_first_read?.map((entry) => entry.path)).toEqual(

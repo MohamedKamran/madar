@@ -1087,7 +1087,11 @@ export async function runContextPackCommand(
     : undefined
   return renderContextPackOutput(options.format, buildPackSchemaV1({
     ...baseResponse(options, initialPlan, plannerBudget, resolvedTask.task_kind),
-    ...buildExplainPackPayloadCore(dependencies.compactRetrieveResult(retrieval), retrieval, implementation),
+    ...(
+      resolvedTask.task_kind === 'explain'
+        ? buildExplainPackPayloadCore(dependencies.compactRetrieveResult(retrieval), retrieval, implementation)
+        : buildExplainPackPayload(dependencies.compactRetrieveResult(retrieval), retrieval, implementation)
+    ),
     retrieval,
     ...(options.why ? { routing: buildRoutingDebug(retrieval) } : {}),
   }))
