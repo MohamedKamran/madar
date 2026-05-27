@@ -2,7 +2,12 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
-import { executeNativeAgentCompare, type NativeAgentCompareReport, type NativeAgentCompareResult } from '../compare.js'
+import {
+  executeNativeAgentCompare,
+  inspectClaudeNativeAgentInstall,
+  type NativeAgentCompareReport,
+  type NativeAgentCompareResult,
+} from '../compare.js'
 import {
   benchmarkIsolationEnabled,
   captureBenchmarkEnvironment,
@@ -78,7 +83,7 @@ export interface BenchmarkSuiteSummaryCell {
   taskName: string
   mode: 'cold' | 'warm'
   prompt: string | null
-  status: 'completed' | 'partial' | 'planned' | 'env_mismatch'
+  status: 'completed' | 'partial' | 'planned' | 'skipped' | 'env_mismatch'
   reason: string | null
   isolation: boolean | null
   baseline: BenchmarkSuiteArmMetricsSummary
@@ -101,6 +106,7 @@ export interface BenchmarkSuiteSummary {
     mode: BenchmarkSuiteMode
     trials: number
   }
+  cells_skipped_for_install: number
   cells_skipped_for_env_drift: number
   cells: BenchmarkSuiteSummaryCell[]
 }
@@ -387,9 +393,13 @@ function summarizeCellStatus(
   madar: BenchmarkSuiteArmMetricsSummary,
   spiMadar: BenchmarkSuiteArmMetricsSummary | null,
   planned: boolean,
+  skipped: boolean,
 ): BenchmarkSuiteSummaryCell['status'] {
   if (planned) {
     return 'planned'
+  }
+  if (skipped) {
+    return 'skipped'
   }
   const baselineDone = isCompletedArm(baseline)
   const madarDone = isCompletedArm(madar)
@@ -409,10 +419,13 @@ function formatMetric(stats: BenchmarkSuiteMetricStats | null, digits = 0): stri
 }
 
 function formatCellRow(cell: BenchmarkSuiteSummaryCell): string {
+  const statusLabel = cell.status === 'skipped' ? 'skipped (no install)' : cell.status
+  const reason = cell.reason ?? '—'
   return [
     cell.repoId,
-    cell.status,
+    statusLabel,
     cell.isolation === null ? '—' : String(cell.isolation),
+    reason,
     formatMetric(cell.baseline.input_tokens),
     formatMetric(cell.madar.input_tokens),
     formatMetric(cell.spi_madar?.input_tokens ?? null),
@@ -440,6 +453,7 @@ function formatBenchmarkSuiteSummaryMarkdown(summary: BenchmarkSuiteSummary): st
     '',
     `- Generated: ${summary.completed_at}`,
     `- Filters: repo=${summary.filters.repo ?? 'all'}, task=${summary.filters.task ?? 'all'}, mode=${summary.filters.mode}, trials=${summary.filters.trials}`,
+    `- cells_skipped_for_install: ${summary.cells_skipped_for_install}`,
     `- Cells skipped for env drift: ${summary.cells_skipped_for_env_drift}`,
     '- Per-repo rows only.',
     '',
@@ -460,7 +474,7 @@ function formatBenchmarkSuiteSummaryMarkdown(summary: BenchmarkSuiteSummary): st
       }
       lines.push(`### ${mode === 'cold' ? 'Cold cache' : 'Warm cache'}`)
       lines.push('')
-      lines.push('| Repo | Status | Isolation | Baseline input tokens | Madar input tokens | SPI Madar input tokens | Baseline tool calls | Madar tool calls | SPI Madar tool calls | Baseline Read | Madar Read | SPI Madar Read | Baseline Glob/Grep | Madar Glob/Grep | SPI Madar Glob/Grep | Baseline wall-clock (ms) | Madar wall-clock (ms) | SPI Madar wall-clock (ms) | Baseline cost (USD) | Madar cost (USD) | SPI Madar cost (USD) |')
+      lines.push('| Repo | Status | Isolation | Reason | Baseline input tokens | Madar input tokens | SPI Madar input tokens | Baseline tool calls | Madar tool calls | SPI Madar tool calls | Baseline Read | Madar Read | SPI Madar Read | Baseline Glob/Grep | Madar Glob/Grep | SPI Madar Glob/Grep | Baseline wall-clock (ms) | Madar wall-clock (ms) | SPI Madar wall-clock (ms) | Baseline cost (USD) | Madar cost (USD) | SPI Madar cost (USD) |')
       lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |')
       for (const cell of modeCells) {
         lines.push(`| ${formatCellRow(cell)} |`)
@@ -561,6 +575,7 @@ export async function runBenchmarkSuite(
   const outputRoot = createSuiteOutputRoot(resolve(options.outputDir), startedAt)
   const readyPlans = plans.filter((plan) => plan.status === 'ready')
   const preparedRepos = new Map<string, { legacyGraphPath: string; spiGraphPath: string | null }>()
+  const skippedRepos = new Map<string, string>()
   const scratchRoots: string[] = []
   const stagingRoot = resolve('out/benchmark-suite-staging', timestampDirectoryName(startedAt))
   const summaryCells: BenchmarkSuiteSummaryCell[] = []
@@ -569,6 +584,20 @@ export async function runBenchmarkSuite(
     mkdirSync(stagingRoot, { recursive: true })
 
     for (const repo of [...new Set(readyPlans.map((plan) => plan.repo))]) {
+      const installCheck = inspectClaudeNativeAgentInstall(repo.path)
+      if (!installCheck.verified) {
+        skippedRepos.set(
+          repo.id,
+          [
+            'No Madar install detected in repo; skipped benchmark cell.',
+            ...installCheck.artifacts
+              .filter((artifact) => !artifact.ok)
+              .map((artifact) => artifact.detail),
+          ].join(' '),
+        )
+        continue
+      }
+
       const scratchRoot = mkdtempSync(join(tmpdir(), `madar-bench-suite-${repo.id}-`))
       scratchRoots.push(scratchRoot)
 
@@ -600,6 +629,29 @@ export async function runBenchmarkSuite(
           prompt: plan.prompt,
           status: 'planned',
           reason: plan.reason,
+          isolation: null,
+          baseline: summarizeArmMetrics([], 'baseline'),
+          madar: summarizeArmMetrics([], 'madar'),
+          spi_madar: plan.repo.supportsSpi ? summarizeArmMetrics([], 'madar') : null,
+          artifacts: {
+            legacy_share_safe_reports: [],
+            spi_share_safe_reports: [],
+          },
+        })
+        continue
+      }
+
+      const skippedReason = skippedRepos.get(plan.repo.id)
+      if (skippedReason) {
+        summaryCells.push({
+          repoId: plan.repo.id,
+          repoName: plan.repo.name,
+          taskId: plan.task.id,
+          taskName: plan.task.name,
+          mode: plan.mode,
+          prompt: plan.prompt,
+          status: 'skipped',
+          reason: skippedReason,
           isolation: null,
           baseline: summarizeArmMetrics([], 'baseline'),
           madar: summarizeArmMetrics([], 'madar'),
@@ -701,7 +753,7 @@ export async function runBenchmarkSuite(
         taskName: plan.task.name,
         mode: plan.mode,
         prompt: plan.prompt,
-        status: summarizeCellStatus(baseline, madar, spiMadar, false),
+        status: summarizeCellStatus(baseline, madar, spiMadar, false, false),
         reason: null,
         isolation: cellIsolation,
         baseline,
@@ -732,20 +784,33 @@ export async function runBenchmarkSuite(
       mode: options.mode,
       trials: options.trials,
     },
+    cells_skipped_for_install: summaryCells.filter((cell) => cell.status === 'skipped').length,
     cells_skipped_for_env_drift: summaryCells.filter((cell) => cell.status === 'env_mismatch').length,
     cells: summaryCells,
   }
   const { summaryPath, summaryJsonPath } = writeSummary(outputRoot, summary)
-  const runnableCount = summaryCells.filter((cell) => cell.status !== 'planned' && cell.status !== 'env_mismatch').length
-  const envMismatchCount = summaryCells.filter((cell) => cell.status === 'env_mismatch').length
+  const runnableCount = summaryCells.filter(
+    (cell) => cell.status !== 'planned' && cell.status !== 'skipped' && cell.status !== 'env_mismatch',
+  ).length
+  const envMismatchCount = summary.cells_skipped_for_env_drift
   const plannedCount = summaryCells.filter((cell) => cell.status === 'planned').length
+  const skippedCount = summary.cells_skipped_for_install
+  const cellSummaryParts = [`Cells: ${runnableCount} measured`]
+
+  if (envMismatchCount > 0) {
+    cellSummaryParts.push(`${envMismatchCount} env mismatch`)
+  }
+  cellSummaryParts.push(`${plannedCount} planned`)
+  if (skippedCount > 0) {
+    cellSummaryParts.push(`${skippedCount} skipped for install`)
+  }
 
   return {
     text: [
       `Wrote benchmark suite results to ${portablePath(outputRoot)}`,
       `Summary: ${portablePath(summaryPath)}`,
       `JSON: ${portablePath(summaryJsonPath)}`,
-      `Cells: ${runnableCount} measured · ${envMismatchCount} env mismatch · ${plannedCount} planned`,
+      cellSummaryParts.join(' · '),
     ].join('\n'),
     outputRoot,
     summaryPath,
