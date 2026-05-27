@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 describe('benchmark suite isolation docs', () => {
   const methodology = readFileSync(resolve('docs/benchmarks/suite/methodology.md'), 'utf8')
+  const gitAttributes = readFileSync(resolve('.gitattributes'), 'utf8')
   const isolationClaude = readFileSync(resolve('docs/benchmarks/suite/isolation/.claude/CLAUDE.md'), 'utf8')
   const isolationSettings = readFileSync(resolve('docs/benchmarks/suite/isolation/.claude/settings.json'), 'utf8')
   const environment = JSON.parse(readFileSync(resolve('docs/benchmarks/suite/isolation/environment.json'), 'utf8')) as {
@@ -60,5 +61,9 @@ describe('benchmark suite isolation docs', () => {
     expect(runIsolated).toContain('"--stdio"')
     expect(runIsolated).toContain('"out/graph.json"')
     expect(runIsolated).toContain('bench:suite "$@"')
+  })
+
+  it('forces LF checkout for the pinned isolation CLAUDE.md', () => {
+    expect(gitAttributes).toContain('docs/benchmarks/suite/isolation/.claude/CLAUDE.md text eol=lf')
   })
 })
