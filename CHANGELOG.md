@@ -2,7 +2,50 @@
 
 All notable changes to the TypeScript package will be documented in this file.
 
-## [Unreleased]
+## [0.27.0-next.4] - 2026-05-27
+
+### Changed
+
+- **Managed installs are now detected by structure instead of a brittle hook-string grep**: `madar compare` and `madar bench:suite` now recognize the real Claude managed hook shape even when the hook command is base64-wrapped or otherwise obfuscated, so valid installed runs are no longer mislabeled as missing installs.
+- **Installed hook identity is now stable across agent surfaces**: Claude, Gemini, and Codex installs now write explicit Madar hook identity markers, compare keeps matcher families distinct when validating installs, and uninstall/detection logic now shares the same managed-hook recognizer instead of drifting by platform.
+
+## [0.27.0-next.3] - 2026-05-27
+
+### Changed
+
+- **Explain-mode MCP flows now stay tighter and more agent-readable**: explain prompts route to `context_pack`, `retrieve` now ships bounded snippets, and the relevant Madar MCP responses surface a top-level `evidence` block with `pack_confidence`, `coverage`, and `agent_directive` so installed guidance can gate exploration on the response itself.
+- **Compare and native-agent traces now explain install behavior more clearly**: compare output distinguishes reduced exploration from added-context-only runs, records `agent_directive_seen` values from Madar tool results, and install-gate regressions make it easier to spot when Madar was available but unused or over-expanded.
+- **Benchmark-suite isolation receipts are more reproducible**: the suite now checks in its isolation environment metadata and runner assets more explicitly, keeping benchmark proofs and the documented environment closer together across platforms.
+
+## [0.27.0-next.2] - 2026-05-27
+
+### Changed
+
+- **Public claim surfaces now map directly to evidence**: README/package/docs language now separates demonstrated behavior from in-progress and not-yet-measured claims, benchmark docs point at the per-repo suite scaffold instead of a single cross-repo headline, and `docs/claims-and-evidence.md` records what each public claim is allowed to say.
+- **The benchmark suite is now runnable and seeded with a real measured row**: `madar bench:suite` expands fixed repo/task manifests, stages compare-backed trials safely, writes summaries and share-safe raw artifacts under `docs/benchmarks/suite/results/`, and ships the first 3-trial warm `nestjs-mid` / `explain-runtime` receipt.
+- **Installed guidance stays stricter about bounded exploration**: strict install profiles now explicitly avoid broad raw-file exploration after a strong pack, compare/native-agent traces explain when Madar reduced exploration versus only adding context, and `out/GRAPH_REPORT.md` stays fallback-only when the pack or graph tools are unavailable, stale, or insufficient.
+
+## [0.27.0-next.1] - 2026-05-26
+
+### Changed
+
+- **Context packs stay more trustworthy when evidence is weak**: directive adapters now switch to more cautious wording when confidence or semantic coverage is weak, implementation packs prefer workflow centers in `recommended_first_read`, and runtime-generation explain fallbacks demote helper-style nodes when no execution spine is available.
+- **Installed-agent flows expand less often and compare output explains why**: strict agent install guidance now answers after one strong pack unless diagnostics or missing-context signals justify expansion, and compare/native-agent traces now distinguish between reduced exploration and added-context-only runs.
+- **Runtime and reporting surfaces are more honest and stable**: runtime-generation `phase_coverage` no longer overstates unseen phases, graph summaries avoid empty outputs on valid graphs, compare output reports token regressions in the right direction, and sensitive-path detection is less prone to false positives.
+
+## [0.27.0-next.0] - 2026-05-25
+
+### Added
+
+- **Pack Schema v1 and agent-ready brief adapters**: `madar pack` now emits a stable Pack Schema v1 envelope for implementation tasks, adds agent-specific `markdown`, `claude`, and `copilot` brief renderers alongside JSON/plain-text output, and preserves workflow centers, first-read guidance, likely edit/test files, public contracts, risk boundaries, validation commands, negative guidance, confidence, and why-explanation from one source of truth.
+- **Real pack-quality fixture coverage for workflow-owner promotion**: the pack-quality regression suite now includes fixture-backed acceptance coverage for indirect lexical seeds so workflow-owner promotion remains stable when graph expansion should beat helper-style direct matches.
+
+### Changed
+
+- **Implementation packs are sharper, more explainable, and more testable**: implementation-mode packs now add scored workflow centers, likely edit files, likely test files, explicit Pack Schema v1 sections, budget-aware compression, helper-target preservation when the prompt explicitly names the helper, and the search → expand → promote → attach → refine → render retrieval pipeline metadata.
+- **Pack output quality is more stable across adapters and releases**: legacy `text` output stays backward-compatible, the new adapter renderers avoid malformed `: undefined` bullets, and real fixture regressions now lock down the pack surfaces that changed across the recent implementation-pack work.
+
+- **Semantic retrieval is now an explicit opt-in install**: `@huggingface/transformers` no longer ships in the default dependency set for `@lubab/madar`; install it separately to enable `--semantic` / `--rerank`, and madar now surfaces an explicit install hint when that optional package is missing.
 
 ## [0.26.1] - 2026-05-24
 

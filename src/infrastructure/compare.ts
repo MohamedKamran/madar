@@ -6,10 +6,19 @@ import type { ContextPackRoutingDebug } from '../contracts/context-pack.js'
 import { KnowledgeGraph } from '../contracts/graph.js'
 import type { ContextSessionState } from '../contracts/context-session.js'
 import { buildContextPrompt, type ContextPromptStableSection } from './context-prompt.js'
-import { buildExplainPackPayload } from './context-pack-command.js'
+import { buildExplainPackPayloadCore } from './context-pack-command.js'
+import { isMadarProjectHook } from './install.js'
 import { CODE_EXTENSIONS, DOC_EXTENSIONS, MANIFEST_METADATA_KEY, OFFICE_EXTENSIONS, PAPER_EXTENSIONS } from '../pipeline/detect.js'
 import { extractCompareBaselineNonCodeText } from '../pipeline/extract/non-code.js'
 import { loadBenchmarkQuestions } from './benchmark/questions.js'
+import {
+  benchmarkIsolationEnabled,
+  captureBenchmarkEnvironment,
+  emptyBenchmarkEnvironmentContamination,
+  extractEnvironmentContamination,
+  type BenchmarkEnvironment,
+  type BenchmarkEnvironmentContamination,
+} from './benchmark/environment.js'
 import { parsePromptRunnerJsonRecord, parsePromptRunnerOutput, type PromptRunnerUsage } from './prompt-runner.js'
 import { classifyRetrievalLevel } from '../runtime/retrieval-gate.js'
 import { compactRetrieveResult, retrieveContext, tokenizeLabel, type CompactRetrieveResult, type RetrieveResult } from '../runtime/retrieve.js'
@@ -102,7 +111,14 @@ export interface CompareMadarTraceTurnSummary {
   turn: number
   tool_call_count: number
   tools: string[]
+  agent_directive_seen?: string[]
 }
+
+type CompareMadarTraceOutcome =
+  | 'no_install'
+  | 'madar_available_but_unused'
+  | 'madar_invoked'
+  | 'madar_invoked_with_followup_exploration'
 
 export interface CompareMadarTrace {
   source: 'claude_messages_tool_use'
@@ -110,6 +126,29 @@ export interface CompareMadarTrace {
   tool_call_count: number
   tool_calls_by_name: Record<string, number>
   per_turn: CompareMadarTraceTurnSummary[]
+  agent_directive_seen?: string[]
+  madar_mcp_call_count: number
+  madar_mcp_calls_by_name: Record<string, number>
+  context_pack_call_count: number
+  focused_follow_up_tool_call_count: number
+  broad_exploration_tool_call_count: number
+  broad_exploration_tool_calls_by_name: Record<string, number>
+  exploration_outcome: CompareMadarTraceOutcome
+  exploration_summary: string
+}
+
+export type NativeAgentMeasurementValidity = 'valid' | 'degraded' | 'invalid'
+
+interface NativeAgentInstallArtifactCheck {
+  label: string
+  ok: boolean
+  detail: string
+  path: string
+}
+
+export interface NativeAgentInstallCheck {
+  verified: boolean
+  artifacts: NativeAgentInstallArtifactCheck[]
 }
 
 export interface ComparePromptReport {
@@ -181,6 +220,7 @@ export interface GenerateCompareArtifactsInput {
   outputDir: string
   execTemplate: string
   baselineMode: CompareBaselineMode
+  allowNoInstall?: boolean
   why?: boolean
   corpusText?: string
   limit?: number | null
@@ -763,6 +803,219 @@ function parseTraceToolName(value: unknown): string | null {
   return trimmedValue.length > 0 ? trimmedValue : null
 }
 
+function parseAnthropicTraceRecords(stdout: string): Record<string, unknown>[] {
+  const trimmed = stdout.trim()
+  if (trimmed.length === 0) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (Array.isArray(parsed)) {
+      return parsed.filter(isRecord)
+    }
+    if (isRecord(parsed)) {
+      return [parsed]
+    }
+  } catch {
+    // Fall through to line-mode parsing below.
+  }
+
+  const records: Record<string, unknown>[] = []
+  for (const line of trimmed.split(/\r?\n/)) {
+    const stripped = line.trim()
+    if (stripped.length === 0) {
+      continue
+    }
+    try {
+      const parsed = JSON.parse(stripped) as unknown
+      if (isRecord(parsed)) {
+        records.push(parsed)
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return records
+}
+
+const MADAR_CONTEXT_PACK_TOOL_NAMES = new Set(['context_pack'])
+const MADAR_FOCUSED_FOLLOW_UP_TOOL_NAMES = new Set([
+  'context_expand',
+  'retrieve',
+  'impact',
+  'relevant_files',
+  'feature_map',
+  'risk_map',
+  'implementation_checklist',
+  'graph_summary',
+  'graph_stats',
+  'community_overview',
+  'call_chain',
+  'pr_impact',
+])
+
+const TRACE_FOCUSED_FOLLOW_UP_TOOL_NAMES = new Set(['read'])
+const TRACE_BROAD_EXPLORATION_TOOL_NAMES = new Set(['bash', 'glob', 'grep', 'toolsearch'])
+
+function canonicalTraceToolName(toolName: string): string {
+  return toolName.startsWith('mcp__madar__') ? toolName.slice('mcp__madar__'.length) : toolName
+}
+
+function isMadarTraceToolName(toolName: string): boolean {
+  const canonicalName = canonicalTraceToolName(toolName)
+  return toolName.startsWith('mcp__madar__')
+    || MADAR_CONTEXT_PACK_TOOL_NAMES.has(canonicalName)
+    || MADAR_FOCUSED_FOLLOW_UP_TOOL_NAMES.has(canonicalName)
+}
+
+function isFocusedFollowUpTraceToolName(toolName: string): boolean {
+  return TRACE_FOCUSED_FOLLOW_UP_TOOL_NAMES.has(toolName.toLowerCase())
+}
+
+function isBroadExplorationTraceToolName(toolName: string): boolean {
+  return TRACE_BROAD_EXPLORATION_TOOL_NAMES.has(toolName.toLowerCase())
+}
+
+function traceToolCountSummary(toolCallsByName: Record<string, number>): string {
+  return Object.entries(toolCallsByName)
+    .sort(([leftName], [rightName]) => leftName.localeCompare(rightName))
+    .map(([toolName, count]) => `${toolName}×${count}`)
+    .join(', ')
+}
+
+function analyzeMadarTraceExploration(perTurn: CompareMadarTraceTurnSummary[]): {
+  madar_mcp_call_count: number
+  madar_mcp_calls_by_name: Record<string, number>
+  context_pack_call_count: number
+  focused_follow_up_tool_call_count: number
+  broad_exploration_tool_call_count: number
+  broad_exploration_tool_calls_by_name: Record<string, number>
+  exploration_outcome: CompareMadarTraceOutcome
+  exploration_summary: string
+} {
+  let madarMcpCallCount = 0
+  let contextPackCallCount = 0
+  let focusedFollowUpToolCallCount = 0
+  let broadExplorationToolCallCount = 0
+  const madarMcpCallsByName: Record<string, number> = {}
+  const focusedFollowUpToolCallsByName: Record<string, number> = {}
+  const broadExplorationToolCallsByName: Record<string, number> = {}
+  let sawFirstMadarCall = false
+
+  for (const turn of perTurn) {
+    for (const toolName of turn.tools) {
+      const canonicalName = canonicalTraceToolName(toolName)
+      const hadSeenMadarCall = sawFirstMadarCall
+      if (isMadarTraceToolName(toolName)) {
+        madarMcpCallCount += 1
+        madarMcpCallsByName[toolName] = (madarMcpCallsByName[toolName] ?? 0) + 1
+        if (MADAR_CONTEXT_PACK_TOOL_NAMES.has(canonicalName)) {
+          contextPackCallCount += 1
+        } else if (hadSeenMadarCall) {
+          focusedFollowUpToolCallCount += 1
+          focusedFollowUpToolCallsByName[toolName] = (focusedFollowUpToolCallsByName[toolName] ?? 0) + 1
+        }
+        sawFirstMadarCall = true
+        continue
+      }
+
+      if (!hadSeenMadarCall) {
+        continue
+      }
+
+      if (isFocusedFollowUpTraceToolName(toolName)) {
+        focusedFollowUpToolCallCount += 1
+        focusedFollowUpToolCallsByName[toolName] = (focusedFollowUpToolCallsByName[toolName] ?? 0) + 1
+        continue
+      }
+
+      if (!isBroadExplorationTraceToolName(toolName)) {
+        continue
+      }
+
+      broadExplorationToolCallCount += 1
+      broadExplorationToolCallsByName[toolName] = (broadExplorationToolCallsByName[toolName] ?? 0) + 1
+    }
+  }
+
+  const sortedMadarMcpCallsByName = Object.fromEntries(
+    Object.entries(madarMcpCallsByName).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
+  )
+  const sortedFocusedFollowUpToolCallsByName = Object.fromEntries(
+    Object.entries(focusedFollowUpToolCallsByName).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
+  )
+  const sortedBroadExplorationToolCallsByName = Object.fromEntries(
+    Object.entries(broadExplorationToolCallsByName).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
+  )
+
+  if (madarMcpCallCount === 0) {
+    return {
+      madar_mcp_call_count: madarMcpCallCount,
+      madar_mcp_calls_by_name: sortedMadarMcpCallsByName,
+      context_pack_call_count: 0,
+      focused_follow_up_tool_call_count: 0,
+      broad_exploration_tool_call_count: 0,
+      broad_exploration_tool_calls_by_name: {},
+      exploration_outcome: 'madar_available_but_unused',
+      exploration_summary: 'No Madar MCP call was recorded.',
+    }
+  }
+
+  const madarToolNames = Object.keys(sortedMadarMcpCallsByName)
+  const madarInvocationSummary = `Madar MCP invoked ${madarMcpCallCount} ${madarMcpCallCount === 1 ? 'time' : 'times'}${madarToolNames.length > 0 ? ` (${madarToolNames.join(', ')})` : ''}`
+  const contextPackSummary =
+    contextPackCallCount > 0
+      ? `${contextPackCallCount} context_pack ${contextPackCallCount === 1 ? 'call' : 'calls'}`
+      : null
+  const focusedSummary =
+    focusedFollowUpToolCallCount > 0
+      ? `${focusedFollowUpToolCallCount} focused follow-up ${focusedFollowUpToolCallCount === 1 ? 'call' : 'calls'}`
+      : null
+  if (broadExplorationToolCallCount === 0) {
+    const summaryParts = [madarInvocationSummary]
+    if (contextPackSummary !== null) {
+      summaryParts.push(contextPackSummary)
+    }
+    if (focusedSummary !== null) {
+      summaryParts.push(focusedSummary)
+    }
+    summaryParts.push('no broad exploration after the first Madar call.')
+    return {
+      madar_mcp_call_count: madarMcpCallCount,
+      madar_mcp_calls_by_name: sortedMadarMcpCallsByName,
+      context_pack_call_count: contextPackCallCount,
+      focused_follow_up_tool_call_count: focusedFollowUpToolCallCount,
+      broad_exploration_tool_call_count: 0,
+      broad_exploration_tool_calls_by_name: {},
+      exploration_outcome: 'madar_invoked',
+      exploration_summary: summaryParts.join('; '),
+    }
+  }
+
+  const broadSummary = `${broadExplorationToolCallCount} broad exploration ${broadExplorationToolCallCount === 1 ? 'call' : 'calls'} after the first Madar call${Object.keys(sortedBroadExplorationToolCallsByName).length > 0 ? ` (${traceToolCountSummary(sortedBroadExplorationToolCallsByName)})` : ''}`
+  const summaryParts = [madarInvocationSummary]
+  if (contextPackSummary !== null) {
+    summaryParts.push(contextPackSummary)
+  }
+  if (focusedSummary !== null) {
+    summaryParts.push(focusedSummary)
+  }
+  summaryParts.push(broadSummary)
+
+  return {
+    madar_mcp_call_count: madarMcpCallCount,
+    madar_mcp_calls_by_name: sortedMadarMcpCallsByName,
+    context_pack_call_count: contextPackCallCount,
+    focused_follow_up_tool_call_count: focusedFollowUpToolCallCount,
+    broad_exploration_tool_call_count: broadExplorationToolCallCount,
+    broad_exploration_tool_calls_by_name: sortedBroadExplorationToolCallsByName,
+    exploration_outcome: 'madar_invoked_with_followup_exploration',
+    exploration_summary: summaryParts.join('; '),
+  }
+}
+
 function parseTraceTurnNumber(value: unknown, fallbackTurn: number): number {
   if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
     return value
@@ -770,24 +1023,97 @@ function parseTraceTurnNumber(value: unknown, fallbackTurn: number): number {
   return fallbackTurn
 }
 
-function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
-  const payload = parsePromptRunnerJsonRecord(stdout)
-  if (payload === null || !Array.isArray(payload.messages)) {
-    return undefined
+function parseTraceMessageContent(message: Record<string, unknown>): unknown[] {
+  if (Array.isArray(message.content)) {
+    return message.content
+  }
+  if (message.type === 'assistant' && isRecord(message.message) && Array.isArray(message.message.content)) {
+    return message.message.content
+  }
+  return []
+}
+
+function parseTraceMessageRole(message: Record<string, unknown>): string | null {
+  if (typeof message.role === 'string') {
+    return message.role
+  }
+  if (message.type === 'assistant') {
+    return 'assistant'
+  }
+  return null
+}
+
+function parseTraceToolResultName(value: Record<string, unknown>): string | null {
+  return parseTraceToolName(value.tool_name ?? value.name)
+}
+
+function parseTraceToolResultPayload(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) {
+    return value
+  }
+  if (typeof value !== 'string') {
+    return null
   }
 
-  const toolCallsByName: Record<string, number> = {}
-  const perTurnIndex = new Map<number, CompareMadarTraceTurnSummary>()
-  let fallbackTurn = 1
-  let totalToolCalls = 0
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
 
-  for (const message of payload.messages) {
-    if (!isRecord(message) || message.role !== 'assistant' || !Array.isArray(message.content)) {
+function extractTraceAgentDirectives(contentPart: Record<string, unknown>): string[] {
+  if (contentPart.type !== 'tool_result') {
+    return []
+  }
+
+  const toolName = parseTraceToolResultName(contentPart)
+  if (toolName === null || !isMadarTraceToolName(toolName)) {
+    return []
+  }
+
+  const contentValues = Array.isArray(contentPart.content) ? contentPart.content : [contentPart.content]
+  const directives: string[] = []
+  for (const entry of contentValues) {
+    const payload = isRecord(entry) && typeof entry.text === 'string'
+      ? parseTraceToolResultPayload(entry.text)
+      : parseTraceToolResultPayload(entry)
+    const evidence = payload && isRecord(payload.evidence) ? payload.evidence : null
+    const directive = typeof evidence?.agent_directive === 'string' ? evidence.agent_directive.trim() : ''
+    if (directive.length > 0 && !directives.includes(directive)) {
+      directives.push(directive)
+    }
+  }
+
+  return directives
+}
+
+function emptyNativeAgentToolCallCountsEntry(): NativeAgentToolCallCountsEntry {
+  return {
+    total: 0,
+    Read: 0,
+    Bash: 0,
+    Glob: 0,
+    Grep: 0,
+    ToolSearch: 0,
+    other: {},
+  }
+}
+
+function extractNativeAgentToolCallCounts(stdout: string): NativeAgentToolCallCountsEntry | null {
+  const records = parseAnthropicTraceRecords(stdout)
+  if (records.length === 0) {
+    return null
+  }
+
+  const counts = emptyNativeAgentToolCallCountsEntry()
+  for (const record of records) {
+    if (record.type !== 'assistant' || !isRecord(record.message) || !Array.isArray(record.message.content)) {
       continue
     }
 
-    const tools: string[] = []
-    for (const contentPart of message.content) {
+    for (const contentPart of record.message.content) {
       if (!isRecord(contentPart) || contentPart.type !== 'tool_use') {
         continue
       }
@@ -797,21 +1123,105 @@ function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
         continue
       }
 
-      tools.push(toolName)
-      toolCallsByName[toolName] = (toolCallsByName[toolName] ?? 0) + 1
-      totalToolCalls += 1
+      const canonicalName = canonicalTraceToolName(toolName)
+      const normalizedName = canonicalName.toLowerCase()
+      counts.total += 1
+      switch (normalizedName) {
+        case 'read':
+          counts.Read += 1
+          break
+        case 'bash':
+          counts.Bash += 1
+          break
+        case 'glob':
+          counts.Glob += 1
+          break
+        case 'grep':
+          counts.Grep += 1
+          break
+        case 'toolsearch':
+        case 'tool_search':
+          counts.ToolSearch += 1
+          break
+        default:
+          counts.other[canonicalName] = (counts.other[canonicalName] ?? 0) + 1
+          break
+      }
+    }
+  }
+
+  if (counts.total === 0) {
+    return null
+  }
+
+  counts.other = Object.fromEntries(
+    Object.entries(counts.other).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
+  )
+  return counts
+}
+
+function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
+  const parsedRecords = parseAnthropicTraceRecords(stdout)
+  if (parsedRecords.length === 0) {
+    return undefined
+  }
+  const records =
+    parsedRecords.length === 1 && Array.isArray(parsedRecords[0]?.messages)
+      ? parsedRecords[0].messages.filter(isRecord)
+      : parsedRecords
+  const toolCallsByName: Record<string, number> = {}
+  const perTurnIndex = new Map<number, CompareMadarTraceTurnSummary>()
+  let fallbackTurn = 1
+  let totalToolCalls = 0
+
+  for (const message of records) {
+    if (!isRecord(message)) {
+      continue
     }
 
-    if (tools.length === 0) {
+    const role = parseTraceMessageRole(message)
+    const content = parseTraceMessageContent(message)
+    if (role === null || content.length === 0) {
       continue
     }
 
     const turn = parseTraceTurnNumber(message.turn, fallbackTurn)
     fallbackTurn = Math.max(fallbackTurn, turn + 1)
     const existingTurn = perTurnIndex.get(turn)
+    const tools: string[] = []
+    const directives: string[] = []
+    for (const contentPart of content) {
+      if (!isRecord(contentPart)) {
+        continue
+      }
+
+      if (role === 'assistant' && contentPart.type === 'tool_use') {
+        const toolName = parseTraceToolName(contentPart.name)
+        if (toolName === null) {
+          continue
+        }
+
+        tools.push(toolName)
+        toolCallsByName[toolName] = (toolCallsByName[toolName] ?? 0) + 1
+        totalToolCalls += 1
+      }
+
+      directives.push(...extractTraceAgentDirectives(contentPart))
+    }
+
+    if (tools.length === 0 && directives.length === 0) {
+      continue
+    }
+
     if (existingTurn) {
       existingTurn.tool_call_count += tools.length
       existingTurn.tools.push(...tools)
+      if (directives.length > 0) {
+        existingTurn.agent_directive_seen = [
+          ...(existingTurn.agent_directive_seen ?? []),
+          ...directives.filter((directive) => !(existingTurn.agent_directive_seen ?? []).includes(directive)),
+        ]
+      }
       continue
     }
 
@@ -819,6 +1229,7 @@ function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
       turn,
       tool_call_count: tools.length,
       tools,
+      ...(directives.length > 0 ? { agent_directive_seen: directives } : {}),
     })
   }
 
@@ -827,6 +1238,9 @@ function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
   }
 
   const sortedTurns = [...perTurnIndex.keys()].sort((leftTurn, rightTurn) => leftTurn - rightTurn)
+  const perTurn = sortedTurns.map((turn) => perTurnIndex.get(turn)!)
+  const agentDirectivesSeen = [...new Set(perTurn.flatMap((turn) => turn.agent_directive_seen ?? []))]
+  const exploration = analyzeMadarTraceExploration(perTurn)
 
   return {
     source: 'claude_messages_tool_use',
@@ -835,7 +1249,27 @@ function extractMadarTrace(stdout: string): CompareMadarTrace | undefined {
     tool_calls_by_name: Object.fromEntries(
       Object.entries(toolCallsByName).sort(([leftName], [rightName]) => leftName.localeCompare(rightName)),
     ),
-    per_turn: sortedTurns.map((turn) => perTurnIndex.get(turn)!),
+    per_turn: perTurn,
+    ...(agentDirectivesSeen.length > 0 ? { agent_directive_seen: agentDirectivesSeen } : {}),
+    ...exploration,
+  }
+}
+
+function applyNativeAgentMadarTraceOutcome(
+  madarTrace: CompareMadarTrace,
+  installVerified: boolean,
+): CompareMadarTrace {
+  if (madarTrace.madar_mcp_call_count > 0) {
+    return madarTrace
+  }
+
+  return {
+    ...madarTrace,
+    exploration_outcome: installVerified ? 'madar_available_but_unused' : 'no_install',
+    exploration_summary:
+      installVerified
+        ? 'Madar install was verified, but no Madar MCP call was recorded.'
+        : 'No Madar install was detected, so no Madar MCP call could be recorded.',
   }
 }
 
@@ -1193,7 +1627,7 @@ export function buildBaselinePromptPack(input: BuildBaselinePromptPackInput): Co
 
 export function buildMadarPromptPack(input: BuildMadarPromptPackInput): ComparePromptPack {
   const explainPayload = JSON.stringify(
-    buildExplainPackPayload(compactRetrieveResult(input.retrieval), input.retrieval),
+    buildExplainPackPayloadCore(compactRetrieveResult(input.retrieval), input.retrieval),
     null,
     2,
   )
@@ -1592,14 +2026,33 @@ function formatCompareMadarTraceSummary(result: GenerateCompareArtifactsResult):
     return total + trace.tool_call_count
   }, 0)
   const totalTurns = traces.reduce((total, trace) => total + trace.per_turn.length, 0)
+  const noInstallRuns = traces.filter((trace) => trace.exploration_outcome === 'no_install').length
+  const madarAvailableButUnusedRuns = traces.filter((trace) => trace.exploration_outcome === 'madar_available_but_unused').length
+  const madarInvokedRuns = traces.filter((trace) => trace.exploration_outcome === 'madar_invoked').length
+  const madarInvokedWithFollowUpExplorationRuns =
+    traces.filter((trace) => trace.exploration_outcome === 'madar_invoked_with_followup_exploration').length
   const topTools = [...toolCallsByName.entries()]
     .sort((leftEntry, rightEntry) => rightEntry[1] - leftEntry[1] || leftEntry[0].localeCompare(rightEntry[0]))
     .slice(0, 3)
     .map(([toolName, count]) => `${toolName}×${count}`)
   const traceCoverage = traces.length === result.reports.length ? '' : ` · traces for ${traces.length}/${result.reports.length} madar runs`
   const topToolsSummary = topTools.length > 0 ? ` · top tools: ${topTools.join(', ')}` : ''
+  const outcomeParts: string[] = []
+  if (noInstallRuns > 0) {
+    outcomeParts.push(`${noInstallRuns} no install`)
+  }
+  if (madarAvailableButUnusedRuns > 0) {
+    outcomeParts.push(`${madarAvailableButUnusedRuns} available but unused`)
+  }
+  if (madarInvokedRuns > 0) {
+    outcomeParts.push(`${madarInvokedRuns} madar invoked`)
+  }
+  if (madarInvokedWithFollowUpExplorationRuns > 0) {
+    outcomeParts.push(`${madarInvokedWithFollowUpExplorationRuns} madar invoked with follow-up exploration`)
+  }
+  const outcomeSummary = outcomeParts.length > 0 ? ` · outcomes: ${outcomeParts.join(', ')}` : ''
 
-  return `Madar trace: ${totalToolCalls} tool call${totalToolCalls === 1 ? '' : 's'} across ${totalTurns} turn${totalTurns === 1 ? '' : 's'}${traceCoverage}${topToolsSummary}`
+  return `Madar trace: ${totalToolCalls} tool call${totalToolCalls === 1 ? '' : 's'} across ${totalTurns} turn${totalTurns === 1 ? '' : 's'}${traceCoverage}${topToolsSummary}${outcomeSummary}`
 }
 
 export function formatCompareSummary(result: GenerateCompareArtifactsResult): string {
@@ -1745,19 +2198,50 @@ export type NativeAgentRunStatus =
   | { kind: 'answer_only'; evidence: string | null; exit_code: number; stderr: string | null; result_path: string }
   | { kind: 'runner_error'; evidence: string | null; exit_code: number | null; stderr: string | null }
 
+export type NativeAgentTokenRegressionMetric =
+  | 'uncached_input_tokens'
+  | 'cache_creation_input_tokens'
+
+export interface NativeAgentToolCallCountsEntry {
+  total: number
+  Read: number
+  Bash: number
+  Glob: number
+  Grep: number
+  ToolSearch: number
+  other: Record<string, number>
+}
+
+export interface NativeAgentToolCallCounts {
+  baseline: NativeAgentToolCallCountsEntry
+  madar: NativeAgentToolCallCountsEntry
+}
+
 export interface NativeAgentCompareReport {
   baseline_mode: 'native_agent'
   question: string
   graph_path: string
+  isolation: boolean
+  environment: BenchmarkEnvironment
+  environment_contamination: BenchmarkEnvironmentContamination
   exec_command: CompareExecCommandSummary
   baseline: NativeAgentRunStatus
   madar: NativeAgentRunStatus
+  install_verified: boolean
+  measurement_validity: NativeAgentMeasurementValidity
+  madar_mcp_call_count: number
+  tool_call_counts?: NativeAgentToolCallCounts
+  madar_trace?: CompareMadarTrace
   reductions: {
     input_tokens: number | null
+    uncached_input_tokens?: number | null
+    cache_creation_input_tokens?: number | null
     num_turns: number | null
     duration_ms: number | null
     cost_usd: number | null
   } | null
+  token_regression: boolean
+  token_regression_reasons: NativeAgentTokenRegressionMetric[]
   prompt_token_source: {
     baseline: 'anthropic_provider_reported' | 'unknown'
     madar: 'anthropic_provider_reported' | 'unknown'
@@ -1840,6 +2324,116 @@ export type NativeAgentRunner = (input: NativeAgentRunnerInput) => Promise<Nativ
 export interface ExecuteNativeAgentCompareDependencies {
   runner?: NativeAgentRunner
   now?: () => Date
+}
+
+const MADAR_SECTION_MARKER = '## madar'
+function readJsonObject(filePath: string): Record<string, unknown> | null {
+  if (!existsSync(filePath)) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function hasSectionMarker(filePath: string, marker = MADAR_SECTION_MARKER): boolean {
+  if (!existsSync(filePath)) {
+    return false
+  }
+  return readFileSync(filePath, 'utf8').includes(marker)
+}
+
+function findHookEntry(
+  settingsPath: string,
+  hookName: 'UserPromptSubmit' | 'PreToolUse' | 'BeforeTool',
+): boolean {
+  const settings = readJsonObject(settingsPath)
+  if (!settings) {
+    return false
+  }
+
+  const hooks = settings.hooks
+  if (!isRecord(hooks)) {
+    return false
+  }
+
+  const hookEntries = hooks[hookName]
+  const matcher =
+    hookName === 'PreToolUse'
+      ? 'Glob|Grep|Bash|Agent|Read'
+      : hookName === 'BeforeTool'
+        ? 'read_file|list_directory|search_for_pattern'
+        : undefined
+  return Array.isArray(hookEntries) && hookEntries.some((hook) => isMadarProjectHook(hook, matcher))
+}
+
+function hasMadarMcpEntry(configPath: string): boolean {
+  const config = readJsonObject(configPath)
+  if (!config) {
+    return false
+  }
+
+  return [config.mcpServers, config.servers].some((servers) => isRecord(servers) && isRecord(servers.madar))
+}
+
+export function inspectClaudeNativeAgentInstall(projectRoot: string): NativeAgentInstallCheck {
+  const mcpPath = join(projectRoot, '.mcp.json')
+  const claudeRulesPath = join(projectRoot, 'CLAUDE.md')
+  const settingsPath = join(projectRoot, '.claude', 'settings.json')
+  const artifacts: NativeAgentInstallArtifactCheck[] = [
+    {
+      label: '.mcp.json',
+      ok: hasMadarMcpEntry(mcpPath),
+      detail: '.mcp.json missing or has no `madar` entry',
+      path: mcpPath,
+    },
+    {
+      label: 'CLAUDE.md',
+      ok: hasSectionMarker(claudeRulesPath),
+      detail: 'CLAUDE.md missing `## madar` section',
+      path: claudeRulesPath,
+    },
+    {
+      label: '.claude/settings.json',
+      ok:
+        findHookEntry(settingsPath, 'UserPromptSubmit')
+        || findHookEntry(settingsPath, 'PreToolUse')
+        || findHookEntry(settingsPath, 'BeforeTool'),
+      detail: '.claude/settings.json missing Madar hook',
+      path: settingsPath,
+    },
+  ]
+
+  return {
+    verified: artifacts.every((artifact) => artifact.ok),
+    artifacts,
+  }
+}
+
+function formatNativeAgentInstallRequiredMessage(check: NativeAgentInstallCheck): string {
+  return [
+    'No Madar install detected in this directory:',
+    ...check.artifacts
+      .filter((artifact) => !artifact.ok)
+      .map((artifact) => `  x ${artifact.detail}`),
+    '',
+    'Run `madar claude install` in the target repo, then rerun compare.',
+    'To proceed without a verified install and mark the metrics INVALID, add `--allow-no-install`.',
+  ].join('\n')
+}
+
+export class NativeAgentInstallRequiredError extends Error {
+  readonly check: NativeAgentInstallCheck
+
+  constructor(check: NativeAgentInstallCheck) {
+    super(formatNativeAgentInstallRequiredMessage(check))
+    this.name = 'NativeAgentInstallRequiredError'
+    this.check = check
+  }
 }
 
 interface NativeAgentAnswerQualityGate {
@@ -2005,42 +2599,12 @@ function isAnthropicUsageBlock(value: unknown): value is AnthropicUsageBlock {
  * exists, so the caller can classify the run as runner_error.
  */
 export function parseAnthropicResultEvent(stdout: string): AnthropicResultEvent | null {
-  const trimmed = stdout.trim()
-  if (trimmed.length === 0) {
+  const records = parseAnthropicTraceRecords(stdout)
+  if (records.length === 0) {
     return null
   }
 
-  // Try parsing the full stdout first (non-stream mode), then fall back to
-  // reading the last JSON-looking line (stream-json mode).
-  const candidates: string[] = []
-  try {
-    JSON.parse(trimmed)
-    candidates.push(trimmed)
-  } catch {
-    // not a single object — fall through to line-mode
-  }
-  if (candidates.length === 0) {
-    const lines = trimmed.split(/\r?\n/).reverse()
-    for (const line of lines) {
-      const stripped = line.trim()
-      if (stripped.startsWith('{') && stripped.endsWith('}')) {
-        candidates.push(stripped)
-        break
-      }
-    }
-  }
-
-  for (const candidate of candidates) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(candidate)
-    } catch {
-      continue
-    }
-    if (!parsed || typeof parsed !== 'object') {
-      continue
-    }
-    const obj = parsed as Record<string, unknown>
+  for (const obj of [...records].reverse()) {
     if (!isAnthropicUsageBlock(obj.usage)) {
       continue
     }
@@ -2130,13 +2694,36 @@ function computeReduction(baseline: number, madar: number): number | null {
   return Number((baseline / madar).toFixed(2))
 }
 
+function relativeChangeFraction(baseline: number, madar: number): number | null {
+  if (baseline <= 0 || madar <= 0) {
+    return null
+  }
+  return Math.abs(madar - baseline) / baseline
+}
+
 function formatDirectionalDelta(
   baseline: number,
   madar: number,
   decreasedLabel: string,
   increasedLabel: string,
+  options: {
+    noMeaningfulChangeThreshold?: number
+    neutralLabel?: string
+  } = {},
 ): string {
-  if (baseline <= 0 || madar <= 0 || baseline === madar) {
+  if (baseline <= 0 || madar <= 0) {
+    return ''
+  }
+
+  if (
+    options.neutralLabel
+    && options.noMeaningfulChangeThreshold !== undefined
+    && (relativeChangeFraction(baseline, madar) ?? Number.POSITIVE_INFINITY) <= options.noMeaningfulChangeThreshold
+  ) {
+    return ` (${options.neutralLabel})`
+  }
+
+  if (baseline === madar) {
     return ''
   }
 
@@ -2145,6 +2732,44 @@ function formatDirectionalDelta(
   }
 
   return ` (${Number((madar / baseline).toFixed(2))}x ${increasedLabel})`
+}
+
+function collectTokenRegressionReasons(
+  baseline: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+  madar: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+): NativeAgentTokenRegressionMetric[] {
+  const reasons: NativeAgentTokenRegressionMetric[] = []
+  if (madar.uncached_input_tokens_anthropic_exact > baseline.uncached_input_tokens_anthropic_exact) {
+    reasons.push('uncached_input_tokens')
+  }
+  if (madar.usage.cache_creation_input_tokens > baseline.usage.cache_creation_input_tokens) {
+    reasons.push('cache_creation_input_tokens')
+  }
+  return reasons
+}
+
+function formatTokenRegressionMetric(
+  metric: NativeAgentTokenRegressionMetric,
+  baseline: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+  madar: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+): string {
+  if (metric === 'uncached_input_tokens') {
+    return `uncached_input_tokens baseline ${baseline.uncached_input_tokens_anthropic_exact} → madar ${madar.uncached_input_tokens_anthropic_exact}${formatDirectionalDelta(baseline.uncached_input_tokens_anthropic_exact, madar.uncached_input_tokens_anthropic_exact, 'less', 'more')}`
+  }
+
+  return `cache_creation_input_tokens baseline ${baseline.usage.cache_creation_input_tokens} → madar ${madar.usage.cache_creation_input_tokens}${formatDirectionalDelta(baseline.usage.cache_creation_input_tokens, madar.usage.cache_creation_input_tokens, 'less', 'more')}`
+}
+
+function formatTokenRegressionWarning(
+  baseline: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+  madar: Extract<NativeAgentRunStatus, { kind: 'succeeded' }>,
+  reasons: readonly NativeAgentTokenRegressionMetric[],
+): string | null {
+  if (reasons.length === 0) {
+    return null
+  }
+
+  return `WARNING: fresh-token regression — ${reasons.map((metric) => formatTokenRegressionMetric(metric, baseline, madar)).join('; ')}`
 }
 
 type NativeAgentComparableReport = NativeAgentCompareReport & {
@@ -2302,6 +2927,12 @@ export async function executeNativeAgentCompare(
   const runner = dependencies.runner ?? defaultNativeAgentRunner
   const reports: NativeAgentCompareReport[] = []
   const answerQualityGates = loadNativeAgentAnswerQualityGates(input.questionsPath)
+  const environment = await captureBenchmarkEnvironment({ projectRoot })
+  const isolation = benchmarkIsolationEnabled()
+  const installCheck = inspectClaudeNativeAgentInstall(projectRoot)
+  if (!installCheck.verified && !input.allowNoInstall) {
+    throw new NativeAgentInstallRequiredError(installCheck)
+  }
 
   for (const [index, question] of questions.entries()) {
     const questionDir = questions.length === 1 ? outputRoot : join(outputRoot, `question-${String(index + 1).padStart(3, '0')}`)
@@ -2318,10 +2949,18 @@ export async function executeNativeAgentCompare(
       baseline_mode: 'native_agent',
       question,
       graph_path: graphPath,
+      isolation,
+      environment,
+      environment_contamination: emptyBenchmarkEnvironmentContamination(),
       exec_command: summarizeExecTemplate(input.execTemplate),
       baseline: { kind: 'runner_error', evidence: null, exit_code: null, stderr: null },
       madar: { kind: 'runner_error', evidence: null, exit_code: null, stderr: null },
+      install_verified: installCheck.verified,
+      measurement_validity: installCheck.verified ? 'degraded' : 'invalid',
+      madar_mcp_call_count: 0,
       reductions: null,
+      token_regression: false,
+      token_regression_reasons: [],
       prompt_token_source: {
         baseline: 'unknown',
         madar: 'unknown',
@@ -2357,6 +2996,7 @@ export async function executeNativeAgentCompare(
     const stamp = timestamp.toISOString().replace(/[^0-9]/g, '').slice(0, 14)
     let snapshot: SnapshotRecord[] = []
     let baselineCrashed: unknown = null
+    let baselineToolCallCounts: NativeAgentToolCallCountsEntry | null = null
     try {
       snapshot = snapshotMadarArtifacts(projectRoot, stamp)
       const baselineCommand = expandCompareExecTemplate(input.execTemplate, {
@@ -2372,6 +3012,7 @@ export async function executeNativeAgentCompare(
         baselineCrashed = error
       }
       if (baselineRun !== null) {
+        baselineToolCallCounts = extractNativeAgentToolCallCounts(baselineRun.stdout)
         const event = parseAnthropicResultEvent(baselineRun.stdout)
         if (event !== null) {
           reportShell.baseline = {
@@ -2435,6 +3076,7 @@ export async function executeNativeAgentCompare(
       outputFile: madarAnswerPath,
     })
     let madarRun: NativeAgentRunnerResult | null = null
+    let madarToolCallCounts: NativeAgentToolCallCountsEntry | null = null
     try {
       madarRun = await runner({ mode: 'madar', question, promptFile, outputFile: madarAnswerPath, command: madarCommand })
     } catch (error) {
@@ -2447,6 +3089,20 @@ export async function executeNativeAgentCompare(
       ensureCompareAnswerFile(madarAnswerPath, '')
     }
     if (madarRun !== null) {
+      madarToolCallCounts = extractNativeAgentToolCallCounts(madarRun.stdout)
+      reportShell.environment_contamination = extractEnvironmentContamination(madarRun.stdout)
+      const rawMadarTrace = extractMadarTrace(madarRun.stdout)
+      const madarTrace =
+        rawMadarTrace === undefined
+          ? undefined
+          : applyNativeAgentMadarTraceOutcome(rawMadarTrace, installCheck.verified)
+      if (madarTrace) {
+        reportShell.madar_trace = madarTrace
+        reportShell.madar_mcp_call_count = madarTrace.madar_mcp_call_count
+      } else {
+        delete reportShell.madar_trace
+        reportShell.madar_mcp_call_count = 0
+      }
       const event = parseAnthropicResultEvent(madarRun.stdout)
       if (event !== null) {
         reportShell.madar = {
@@ -2491,10 +3147,21 @@ export async function executeNativeAgentCompare(
       }
     }
 
+    if (baselineToolCallCounts !== null && madarToolCallCounts !== null) {
+      reportShell.tool_call_counts = {
+        baseline: baselineToolCallCounts,
+        madar: madarToolCallCounts,
+      }
+    } else {
+      delete reportShell.tool_call_counts
+    }
+
     // Compute reductions only when both runs reported usage.
     if (reportShell.baseline.kind === 'succeeded' && reportShell.madar.kind === 'succeeded') {
       reportShell.reductions = {
         input_tokens: computeReduction(reportShell.baseline.total_input_tokens_anthropic_exact, reportShell.madar.total_input_tokens_anthropic_exact),
+        uncached_input_tokens: computeReduction(reportShell.baseline.uncached_input_tokens_anthropic_exact, reportShell.madar.uncached_input_tokens_anthropic_exact),
+        cache_creation_input_tokens: computeReduction(reportShell.baseline.usage.cache_creation_input_tokens, reportShell.madar.usage.cache_creation_input_tokens),
         num_turns: computeReduction(reportShell.baseline.num_turns, reportShell.madar.num_turns),
         duration_ms: computeReduction(reportShell.baseline.duration_ms, reportShell.madar.duration_ms),
         cost_usd:
@@ -2502,6 +3169,8 @@ export async function executeNativeAgentCompare(
             ? computeReduction(reportShell.baseline.total_cost_usd, reportShell.madar.total_cost_usd)
             : null,
       }
+      reportShell.token_regression_reasons = collectTokenRegressionReasons(reportShell.baseline, reportShell.madar)
+      reportShell.token_regression = reportShell.token_regression_reasons.length > 0
     }
     if (reportShell.provider_proof) {
       reportShell.provider_proof.reduction_basis =
@@ -2513,6 +3182,12 @@ export async function executeNativeAgentCompare(
             ? 'mixed'
             : 'unknown'
     }
+    reportShell.measurement_validity =
+      reportShell.install_verified
+        ? reportShell.madar_mcp_call_count > 0
+          ? 'valid'
+          : 'degraded'
+        : 'invalid'
     const answerQuality = evaluateNativeAgentAnswerQualityReport(
       answerQualityGates,
       question,
@@ -2568,6 +3243,40 @@ function writeNativeAgentReport(report: NativeAgentCompareReport): void {
   )
 }
 
+function formatMeasurementValidityLine(report: NativeAgentCompareReport): string {
+  switch (report.measurement_validity) {
+    case 'valid':
+      return 'measurement_validity: valid'
+    case 'degraded':
+      return 'measurement_validity: degraded (install detected, but no Madar MCP call was recorded)'
+    case 'invalid':
+      return 'measurement_validity: INVALID — no Madar install was detected; do not cite these numbers'
+  }
+}
+
+function formatMadarMcpCallCountLine(report: NativeAgentCompareReport): string {
+  if (!report.madar_trace) {
+    return `madar_mcp_call_count: ${report.madar_mcp_call_count}`
+  }
+
+  const madarToolSummary = Object.entries(report.madar_trace.madar_mcp_calls_by_name)
+    .sort(([leftName], [rightName]) => leftName.localeCompare(rightName))
+    .map(([toolName]) => toolName)
+    .join(', ')
+
+  return madarToolSummary.length > 0
+    ? `madar_mcp_call_count: ${report.madar_mcp_call_count} (${madarToolSummary})`
+    : `madar_mcp_call_count: ${report.madar_mcp_call_count}`
+}
+
+function appendNativeAgentValidityLines(lines: string[], report: NativeAgentCompareReport): void {
+  lines.push(
+    `    ${formatMeasurementValidityLine(report)}`,
+    `    install_verified: ${report.install_verified}`,
+    `    ${formatMadarMcpCallCountLine(report)}`,
+  )
+}
+
 export function formatNativeAgentCompareSummary(result: NativeAgentCompareResult): string {
   const lines: string[] = [
     `[madar compare] completed ${result.reports.length} native_agent question(s)`,
@@ -2619,11 +3328,15 @@ export function formatNativeAgentCompareSummary(result: NativeAgentCompareResult
   }
   for (const report of result.reports) {
     if (isNativeAgentRunFailure(report.baseline) || isNativeAgentRunFailure(report.madar)) {
-      lines.push(`- "${report.question}" → runner error (see ${portablePath(report.paths.report)})`)
+      lines.push(`- "${report.question}"`)
+      appendNativeAgentValidityLines(lines, report)
+      lines.push(`    runner error (see ${portablePath(report.paths.report)})`)
       continue
     }
     if (report.baseline.kind === 'answer_only' || report.madar.kind === 'answer_only') {
-      lines.push(`- "${report.question}" → answer-only run saved; no Anthropic usage block was available, so provider-proof reductions were not computed (see ${portablePath(report.paths.report)})`)
+      lines.push(`- "${report.question}"`)
+      appendNativeAgentValidityLines(lines, report)
+      lines.push(`    answer-only run saved; no Anthropic usage block was available, so provider-proof reductions were not computed (see ${portablePath(report.paths.report)})`)
       continue
     }
 
@@ -2642,9 +3355,14 @@ export function formatNativeAgentCompareSummary(result: NativeAgentCompareResult
 
     lines.push(
       `- "${report.question}"`,
+      ...(() => {
+        const validityLines: string[] = []
+        appendNativeAgentValidityLines(validityLines, report)
+        return validityLines
+      })(),
       `    num_turns: baseline ${baseline.num_turns} → madar ${madar.num_turns}${formatDirectionalDelta(baseline.num_turns, madar.num_turns, 'fewer', 'more')}`,
       `    latency:   baseline ${baseline.duration_ms}ms → madar ${madar.duration_ms}ms${formatDirectionalDelta(baseline.duration_ms, madar.duration_ms, 'faster', 'slower')}`,
-      `    input_tokens (Anthropic-reported): baseline ${baseline.total_input_tokens_anthropic_exact} → madar ${madar.total_input_tokens_anthropic_exact}${formatDirectionalDelta(baseline.total_input_tokens_anthropic_exact, madar.total_input_tokens_anthropic_exact, 'less', 'more')}`,
+      `    input_tokens (Anthropic-reported): baseline ${baseline.total_input_tokens_anthropic_exact} → madar ${madar.total_input_tokens_anthropic_exact}${formatDirectionalDelta(baseline.total_input_tokens_anthropic_exact, madar.total_input_tokens_anthropic_exact, 'less', 'more', { noMeaningfulChangeThreshold: 0.1, neutralLabel: 'no meaningful change' })}`,
     )
     if (hasCacheActivity) {
       lines.push(
@@ -2652,6 +3370,20 @@ export function formatNativeAgentCompareSummary(result: NativeAgentCompareResult
         `    cache_creation_input_tokens (Anthropic-reported): baseline ${baseline.usage.cache_creation_input_tokens} → madar ${madar.usage.cache_creation_input_tokens}${formatDirectionalDelta(baseline.usage.cache_creation_input_tokens, madar.usage.cache_creation_input_tokens, 'less', 'more')}`,
         `    cache_read_input_tokens (Anthropic-reported): baseline ${baseline.usage.cache_read_input_tokens} → madar ${madar.usage.cache_read_input_tokens}${formatDirectionalDelta(baseline.usage.cache_read_input_tokens, madar.usage.cache_read_input_tokens, 'less', 'more')}`,
       )
+    }
+    if (report.tool_call_counts) {
+      lines.push(
+        `    tool calls: baseline ${report.tool_call_counts.baseline.total} → madar ${report.tool_call_counts.madar.total}${formatDirectionalDelta(report.tool_call_counts.baseline.total, report.tool_call_counts.madar.total, 'fewer', 'more')}`,
+      )
+    }
+    const derivedTokenRegressionReasons = collectTokenRegressionReasons(baseline, madar)
+    const tokenRegressionReasons =
+      report.token_regression_reasons && report.token_regression_reasons.length > 0
+        ? report.token_regression_reasons
+        : derivedTokenRegressionReasons
+    const tokenRegressionWarning = formatTokenRegressionWarning(baseline, madar, tokenRegressionReasons)
+    if (tokenRegressionWarning) {
+      lines.push(`    ${tokenRegressionWarning}`)
     }
     if (report.answer_quality) {
       const baselineFindings = [
@@ -2665,6 +3397,9 @@ export function formatNativeAgentCompareSummary(result: NativeAgentCompareResult
       lines.push(
         `    answer quality: baseline ${report.answer_quality.baseline.passed ? 'PASS' : `FAIL (${baselineFindings.join(', ')})`} · madar ${report.answer_quality.madar.passed ? 'PASS' : `FAIL (${madarFindings.join(', ')})`}${report.answer_quality.manual_review_notes.length > 0 ? ` · manual review: ${formatCount(report.answer_quality.manual_review_notes.length, 'note', 'notes')}` : ''}`,
       )
+    }
+    if (report.madar_trace) {
+      lines.push(`    madar_trace: ${report.madar_trace.exploration_outcome} · ${report.madar_trace.exploration_summary}`)
     }
     lines.push(`    provider/runtime proof: Anthropic reported input, cache, and total tokens for both runs`)
   }

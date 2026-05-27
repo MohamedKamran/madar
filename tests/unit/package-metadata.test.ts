@@ -12,6 +12,8 @@ interface PackageManifest {
   license?: string
   name?: string
   overrides?: Record<string, string>
+  peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
   scripts?: Record<string, string>
   version?: string
 }
@@ -152,15 +154,18 @@ describe('package metadata', () => {
     expect(loadChangelog()).toContain(`## [${manifest.version}]`)
   })
 
-  it('positions package metadata around the context plane and context compiler surface', () => {
+  it('positions package metadata around execution-slice framing instead of generic graph marketing', () => {
     const manifest = loadPackageManifest()
     const readme = loadReadme().toLowerCase()
 
-    expect(manifest.description?.toLowerCase()).toContain('context plane')
-    expect(manifest.description?.toLowerCase()).toContain('context compiler')
-    expect(manifest.keywords ?? []).toEqual(expect.arrayContaining(['context-plane', 'context-compiler']))
-    expect(readme).toContain('context plane')
-    expect(readme).toContain('context compiler')
+    expect(manifest.description?.toLowerCase()).toContain('what runs for this task')
+    expect(manifest.description?.toLowerCase()).toContain('verifiable context packs')
+    expect(manifest.description?.toLowerCase()).not.toContain('context plane')
+    expect(manifest.description?.toLowerCase()).not.toContain('context compiler')
+    expect(readme).toContain('what runs for this task')
+    expect(readme).toContain('execution slice')
+    expect(readme).not.toContain('context plane')
+    expect(readme).not.toContain('context compiler')
   })
 
   it('keeps the README command surface aligned with pack and prompt automation flows', () => {
@@ -215,11 +220,17 @@ describe('package metadata', () => {
     const manifest = loadPackageManifest()
     const devDependencies = manifest.devDependencies ?? {}
     const dependencies = manifest.dependencies ?? {}
+    const peerDependencies = manifest.peerDependencies ?? {}
+    const peerDependenciesMeta = manifest.peerDependenciesMeta ?? {}
+    const readme = loadReadme()
 
     expect(isAtLeastVersion(devDependencies.vite, [8, 0, 11])).toBe(true)
     expect(devDependencies.vite).toMatch(/^[~^]?8\./)
     expect(dependencies['@xenova/transformers']).toBeUndefined()
-    expect(typeof dependencies['@huggingface/transformers']).toBe('string')
+    expect(dependencies['@huggingface/transformers']).toBeUndefined()
+    expect(typeof peerDependencies['@huggingface/transformers']).toBe('string')
+    expect(peerDependenciesMeta['@huggingface/transformers']).toEqual({ optional: true })
+    expect(readme).toContain('npm install @huggingface/transformers')
   })
 
   it('caps vitest worker parallelism to keep the full suite stable on shared machines', () => {

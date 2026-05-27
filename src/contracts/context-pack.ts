@@ -9,8 +9,11 @@ import type {
 import type { TaskIntentKind } from './task-intent.js'
 import type { ContextPackDiagnosticWarning } from './context-pack-diagnostics.js'
 import type { SourceDomain } from '../shared/source-discovery.js'
+import type { TaskContextPlan } from './task-context-plan.js'
+import type { MadarResponseEvidence } from '../runtime/mcp-response-evidence.js'
 
 export type ContextPackTaskKind = 'explain' | 'implement' | 'review' | 'impact'
+export type ContextPackFormat = 'json' | 'text' | 'markdown' | 'claude' | 'copilot'
 
 export type ContextPackEvidenceClass = 'primary' | 'supporting' | 'structural' | 'change' | 'impact'
 
@@ -171,10 +174,30 @@ export interface ContextPackRuntimeGenerationAnswerContract {
   confidence?: 'high' | 'medium' | 'low'
 }
 
+export type ImplementationPackPhase =
+  | 'seed'
+  | 'expand'
+  | 'promote'
+  | 'attach'
+  | 'refine'
+  | 'render'
+
+export interface ImplementationPackPipelinePhase {
+  phase: ImplementationPackPhase
+  summary: string
+}
+
+export interface ImplementationPackRetrievalPipeline {
+  phases: ImplementationPackPipelinePhase[]
+}
+
 export interface ImplementationPackFileHint {
   path: string
-  why: string
+  score: number
+  reason: string
+  why?: string
   matched_symbols: string[]
+  phases?: ImplementationPackPhase[]
 }
 
 export interface ImplementationPackSurfaceHint {
@@ -183,6 +206,7 @@ export interface ImplementationPackSurfaceHint {
   line_number: number
   kind: 'contract' | 'public_surface' | 'pattern'
   why: string
+  phases?: ImplementationPackPhase[]
 }
 
 export interface ImplementationPackRiskBoundary {
@@ -201,6 +225,8 @@ export interface ImplementationPackRuntimeContext {
 
 export interface ImplementationPackGuidance {
   summary: string
+  retrieval_pipeline: ImplementationPackRetrievalPipeline
+  workflow_centers: ContextPackWorkflowCenter[]
   likely_edit_files: ImplementationPackFileHint[]
   likely_test_files: ImplementationPackFileHint[]
   contracts_and_public_surfaces: ImplementationPackSurfaceHint[]
@@ -210,6 +236,32 @@ export interface ImplementationPackGuidance {
   acceptance_criteria_summary: string[]
   cautions: string[]
   runtime_context_if_relevant?: ImplementationPackRuntimeContext
+}
+
+export interface ContextPackWorkflowCenter {
+  label: string
+  node_count?: number
+  path?: string
+  score?: number
+  reasons?: string[]
+  matched_symbols?: string[]
+  reason: string
+  phases?: ImplementationPackPhase[]
+}
+
+export interface ContextPackRecommendedFirstRead {
+  path: string
+  label?: string
+  reason: string
+}
+
+export interface ContextPackPublicContract {
+  label: string
+  source_file: string
+  line_number: number
+  kind: 'contract' | 'public_surface'
+  why: string
+  phases?: ImplementationPackPhase[]
 }
 
 export type ContextRepresentationType =
@@ -365,11 +417,35 @@ export interface CompiledContextPack<
   slice?: ContextPackSliceMetadata
   execution_slice?: ContextPackExecutionSlice
   answer_contract?: ContextPackRuntimeGenerationAnswerContract
-  /**
-   * Retrieval-gate decision (#75) attached when the caller invoked the
-   * gate before building the pack. Carries `level`, `reason`, `intent`,
-   * `skipped_retrieval`, and the underlying signals so consumers can
-   * audit why a retrieval depth was chosen.
-   */
   retrieval_gate?: RetrievalGateDecision
+}
+
+export interface ContextPackSchemaV1<TPack = unknown> {
+  schema_version: 1
+  task: ContextPackTaskKind
+  task_intent: TaskIntentKind
+  prompt: string
+  budget: number
+  graph_path: string
+  plan: TaskContextPlan
+  workflow_centers: ContextPackWorkflowCenter[]
+  recommended_first_read: ContextPackRecommendedFirstRead[]
+  likely_edit_files: ImplementationPackFileHint[]
+  likely_test_files: ImplementationPackFileHint[]
+  public_contracts: ContextPackPublicContract[]
+  retrieval_pipeline?: ImplementationPackRetrievalPipeline
+  risk_boundaries: ImplementationPackRiskBoundary[]
+  validation_commands: string[]
+  negative_guidance: string[]
+  confidence_score: number
+  why_explanation: string[]
+  pack: TPack
+  evidence: MadarResponseEvidence
+  claims: ContextPackClaim[]
+  expandable: ContextPackExpandableRef[]
+  coverage: ContextPackCoverage
+  missing_context: ContextPackEvidenceClass[]
+  missing_semantic: ContextPackSemanticCategory[]
+  retrieval_gate?: RetrievalGateDecision
+  routing?: ContextPackRoutingDebug
 }

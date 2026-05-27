@@ -18,6 +18,7 @@ import {
   resolveCompareQuestions,
 } from '../../src/infrastructure/compare.js'
 import { runContextPackCommand } from '../../src/infrastructure/context-pack-command.js'
+import { claudeInstall } from '../../src/infrastructure/install.js'
 import { parsePromptRunnerOutput } from '../../src/infrastructure/prompt-runner.js'
 import { saveManifest } from '../../src/pipeline/manifest.js'
 import { toJson } from '../../src/pipeline/export.js'
@@ -235,6 +236,8 @@ function writeProjectFiles(projectRoot: string = PROJECT_FIXTURE_ROOT): void {
     mkdirSync(dirname(absolutePath), { recursive: true })
     writeFileSync(absolutePath, `${content}\n`, 'utf8')
   }
+
+  claudeInstall(projectRoot)
 }
 
 function writeGraphFixture(graph: KnowledgeGraph, graphFixtureRoot: string = GRAPH_FIXTURE_ROOT): string {
@@ -1719,6 +1722,246 @@ describe('compare runtime', () => {
     )
     expect(madarTraceJson).not.toContain(privateQuestionPayload)
     expect(madarTraceJson).not.toContain(privateToolArgument)
+  })
+
+  it('records when a context pack reduced exploration to pack-first plus focused follow-up calls', async () => {
+    const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
+
+    const result = await executeCompareRuns(
+      {
+        graphPath,
+        question: 'how does login create a session',
+        outputDir: COMPARE_OUTPUT_ROOT,
+        execTemplate: 'runner --prompt {prompt_file} --mode {mode} --out {output_file}',
+        baselineMode: 'full',
+        now: new Date('2026-04-24T19:30:00.000Z'),
+      },
+      {
+        runner: async (execution) => ({
+          exitCode: 0,
+          stdout:
+            execution.mode === 'baseline'
+              ? makeClaudeStructuredCompareStdout({
+                  result: 'baseline answer\n',
+                  usage: {
+                    input_tokens: 1200,
+                    output_tokens: 90,
+                    cache_creation_input_tokens: 100,
+                    cache_read_input_tokens: 20,
+                  },
+                })
+              : makeClaudeStructuredCompareStdout({
+                  result: 'madar answer\n',
+                  usage: {
+                    input_tokens: 400,
+                    output_tokens: 70,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 10,
+                  },
+                  assistant_turns: [
+                    {
+                      turn: 1,
+                      content: [{ type: 'tool_use', name: 'mcp__madar__context_pack', input: { question: 'auth flow' } }],
+                    },
+                    {
+                      turn: 2,
+                      content: [{ type: 'tool_use', name: 'mcp__madar__impact', input: { label: 'SessionManager' } }],
+                    },
+                  ],
+                }),
+          stderr: '',
+          elapsedMs: execution.mode === 'baseline' ? 11 : 17,
+        }),
+      },
+    )
+
+    const report = result.reports[0]!
+    const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+    const madarTrace = savedReport.madar_trace as Record<string, unknown> | undefined
+
+    expect(madarTrace).toEqual(
+      expect.objectContaining({
+        madar_mcp_call_count: 2,
+        madar_mcp_calls_by_name: {
+          'mcp__madar__context_pack': 1,
+          'mcp__madar__impact': 1,
+        },
+        context_pack_call_count: 1,
+        focused_follow_up_tool_call_count: 1,
+        broad_exploration_tool_call_count: 0,
+        broad_exploration_tool_calls_by_name: {},
+        exploration_outcome: 'madar_invoked',
+      }),
+    )
+    expect(formatCompareSummary(result)).toContain('outcomes: 1 madar invoked')
+  })
+
+  it('records when a context pack only added context before broad raw exploration continued', async () => {
+    const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
+
+    const result = await executeCompareRuns(
+      {
+        graphPath,
+        question: 'how does login create a session',
+        outputDir: COMPARE_OUTPUT_ROOT,
+        execTemplate: 'runner --prompt {prompt_file} --mode {mode} --out {output_file}',
+        baselineMode: 'full',
+        now: new Date('2026-04-24T19:30:00.000Z'),
+      },
+      {
+        runner: async (execution) => ({
+          exitCode: 0,
+          stdout:
+            execution.mode === 'baseline'
+              ? makeClaudeStructuredCompareStdout({
+                  result: 'baseline answer\n',
+                  usage: {
+                    input_tokens: 1200,
+                    output_tokens: 90,
+                    cache_creation_input_tokens: 100,
+                    cache_read_input_tokens: 20,
+                  },
+                })
+              : makeClaudeStructuredCompareStdout({
+                  result: 'madar answer\n',
+                  usage: {
+                    input_tokens: 400,
+                    output_tokens: 70,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 10,
+                  },
+                  assistant_turns: [
+                    {
+                      turn: 1,
+                      content: [{ type: 'tool_use', name: 'context_pack', input: { question: 'auth flow' } }],
+                    },
+                    {
+                      turn: 2,
+                      content: [
+                        { type: 'tool_use', name: 'Read', input: { file: 'src/auth.ts' } },
+                        { type: 'tool_use', name: 'Grep', input: { pattern: 'SessionManager' } },
+                      ],
+                    },
+                  ],
+                }),
+          stderr: '',
+          elapsedMs: execution.mode === 'baseline' ? 11 : 17,
+        }),
+      },
+    )
+
+    const report = result.reports[0]!
+    const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+    const madarTrace = savedReport.madar_trace as Record<string, unknown> | undefined
+
+    expect(madarTrace).toEqual(
+      expect.objectContaining({
+        madar_mcp_call_count: 1,
+        madar_mcp_calls_by_name: {
+          context_pack: 1,
+        },
+        context_pack_call_count: 1,
+        focused_follow_up_tool_call_count: 1,
+        broad_exploration_tool_call_count: 1,
+        broad_exploration_tool_calls_by_name: {
+          Grep: 1,
+        },
+        exploration_outcome: 'madar_invoked_with_followup_exploration',
+      }),
+    )
+    expect(formatCompareSummary(result)).toContain('outcomes: 1 madar invoked with follow-up exploration')
+  })
+
+  it('records agent_directive values from Madar tool results in madar_trace per turn', async () => {
+    const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
+
+    const result = await executeCompareRuns(
+      {
+        graphPath,
+        question: 'how does login create a session',
+        outputDir: COMPARE_OUTPUT_ROOT,
+        execTemplate: 'runner --prompt {prompt_file} --mode {mode} --out {output_file}',
+        baselineMode: 'full',
+        now: new Date('2026-04-24T19:30:00.000Z'),
+      },
+      {
+        runner: async (execution) => ({
+          exitCode: 0,
+          stdout:
+            execution.mode === 'baseline'
+              ? makeClaudeStructuredCompareStdout({
+                  result: 'baseline answer\n',
+                  usage: {
+                    input_tokens: 1200,
+                    output_tokens: 90,
+                    cache_creation_input_tokens: 100,
+                    cache_read_input_tokens: 20,
+                  },
+                })
+              : JSON.stringify({
+                  type: 'result',
+                  subtype: 'success',
+                  result: 'madar answer\n',
+                  usage: {
+                    input_tokens: 400,
+                    output_tokens: 70,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 10,
+                  },
+                  messages: [
+                    {
+                      role: 'assistant',
+                      turn: 1,
+                      content: [
+                        { type: 'tool_use', name: 'mcp__madar__retrieve', input: { question: 'auth flow' } },
+                      ],
+                    },
+                    {
+                      role: 'user',
+                      turn: 1,
+                      content: [
+                        {
+                          type: 'tool_result',
+                          tool_name: 'mcp__madar__retrieve',
+                          content: JSON.stringify({
+                            evidence: {
+                              agent_directive: 'answer_from_pack',
+                            },
+                          }),
+                        },
+                      ],
+                    },
+                  ],
+                }),
+          stderr: '',
+          elapsedMs: execution.mode === 'baseline' ? 11 : 17,
+        }),
+      },
+    )
+
+    const report = result.reports[0]!
+    const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as {
+      madar_trace?: {
+        agent_directive_seen?: string[]
+        per_turn?: Array<Record<string, unknown>>
+      }
+    }
+
+    expect(savedReport.madar_trace?.agent_directive_seen).toEqual(['answer_from_pack'])
+    expect(savedReport.madar_trace?.per_turn).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          turn: 1,
+          agent_directive_seen: ['answer_from_pack'],
+        }),
+      ]),
+    )
   })
 
   it('keeps madar_trace absent when compare stdout does not expose trace data', async () => {

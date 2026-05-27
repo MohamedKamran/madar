@@ -8,7 +8,7 @@ import * as analyze from '../../src/pipeline/analyze.js'
 import { build } from '../../src/pipeline/build.js'
 import { extractJs } from '../../src/pipeline/extract.js'
 import { inspectReduxModuleExports } from '../../src/pipeline/extract/frameworks/redux.js'
-import { classifyTaskContract } from '../../src/runtime/context-pack.js'
+import { classifyTaskContract, compactContextPack } from '../../src/runtime/context-pack.js'
 import {
   compactRetrieveResult,
   compactRetrieveResultForStdio,
@@ -19,6 +19,7 @@ import {
   tokenWeightsForQuestion,
   tokenizeLabel,
   tokenizeQuestion,
+  withRetrieveSnippetBudget,
 } from '../../src/runtime/retrieve.js'
 import { estimateQueryTokens } from '../../src/runtime/serve.js'
 import { afterEach, vi } from 'vitest'
@@ -2781,8 +2782,179 @@ describe('retrieve', () => {
       }, 0)
 
       expect(compactResult.matched_nodes.length).toBeLessThan(rawResult.matched_nodes.length)
-      expect(compactResult.token_count).toBe(compactTokenCount)
+      expect(compactResult.token_count).toBeGreaterThanOrEqual(compactTokenCount)
       expect(compactResult.token_count).toBeLessThan(rawResult.token_count)
+    })
+
+    it('adds snippet budget metadata and bounds compact retrieve snippets independently of node selection', () => {
+      const compactResult = compactRetrieveResult({
+        question: 'how does auth work',
+        token_count: 999,
+        matched_nodes: Array.from({ length: 4 }, (_, index) => ({
+          node_id: `auth_node_${index + 1}`,
+          label: `AuthNode${index + 1}`,
+          source_file: `/src/auth-${index + 1}.ts`,
+          line_number: index + 1,
+          node_kind: 'function',
+          file_type: 'code',
+          snippet: `export function authNode${index + 1}() {\n  return "${'token '.repeat(12).trim()}"\n}`,
+          match_score: 10 - index,
+          relevance_band: index === 0 ? 'direct' : 'related',
+          community: 0,
+          community_label: 'Auth',
+        })),
+        relationships: [
+          { from: 'AuthNode1', to: 'AuthNode2', relation: 'calls' },
+        ],
+        community_context: [{ id: 0, label: 'Auth', node_count: 4 }],
+        graph_signals: { god_nodes: [], bridge_nodes: [] },
+      }, {
+        snippetBudget: 20,
+        topNWithSnippet: 2,
+      })
+
+      const snippetTokenCount = compactResult.matched_nodes.reduce(
+        (total, node) => total + (typeof node.snippet === 'string' && node.snippet.length > 0 ? estimateQueryTokens(node.snippet) : 0),
+        0,
+      )
+      const compactTokenCount = compactResult.matched_nodes.reduce((total, node) => {
+        const nodeText = `${node.label} ${node.source_file}:${node.line_number} ${node.snippet ?? ''}`
+        return total + estimateQueryTokens(nodeText)
+      }, 0)
+      const sourceResult = {
+        question: 'how does auth work',
+        token_count: 999,
+        matched_nodes: Array.from({ length: 4 }, (_, index) => ({
+          node_id: `auth_node_${index + 1}`,
+          label: `AuthNode${index + 1}`,
+          source_file: `/src/auth-${index + 1}.ts`,
+          line_number: index + 1,
+          node_kind: 'function',
+          file_type: 'code',
+          snippet: `export function authNode${index + 1}() {\n  return "${'token '.repeat(12).trim()}"\n}`,
+          match_score: 10 - index,
+          relevance_band: index === 0 ? 'direct' : 'related',
+          community: 0,
+          community_label: 'Auth',
+        })),
+        relationships: [
+          { from: 'AuthNode1', to: 'AuthNode2', relation: 'calls' },
+        ],
+        community_context: [{ id: 0, label: 'Auth', node_count: 4 }],
+        graph_signals: { god_nodes: [], bridge_nodes: [] },
+      } satisfies import('../../src/runtime/retrieve.js').RetrieveResult
+      const compactPack = compactContextPack(contextPackFromRetrieveResult(sourceResult), { kind: 'retrieve' })
+      const compactPackNodeTokenCount = compactPack.nodes.reduce((total, node) => (
+        total + estimateQueryTokens(`${node.label} ${node.source_file}:${node.line_number} ${node.snippet ?? ''}`)
+      ), 0)
+
+      expect(compactResult.snippet_budget_tokens_used).toBe(snippetTokenCount)
+      expect(compactResult.snippet_budget_tokens_used).toBeLessThanOrEqual(20)
+      expect(compactResult.snippet_budget_tokens_remaining).toBe(20 - snippetTokenCount)
+      expect(compactResult.matched_nodes[0]).toHaveProperty('snippet_truncated')
+      expect(compactResult.matched_nodes[1]).toHaveProperty('snippet_truncated')
+      expect(
+        compactResult.matched_nodes.slice(0, 2).some((node) => typeof node.snippet === 'string' && node.snippet.length > 0),
+      ).toBe(true)
+      expect(compactResult.matched_nodes[2]).toEqual(expect.objectContaining({
+        snippet: null,
+        snippet_truncated: false,
+      }))
+      expect(compactResult.matched_nodes.some((node) => node.snippet_truncated === true)).toBe(true)
+      expect(compactResult.token_count).toBe(compactPack.token_count - compactPackNodeTokenCount + compactTokenCount)
+    })
+
+    it('keeps the focused middle line when compact snippet budgets are tiny', () => {
+      const compactResult = compactRetrieveResult({
+        question: 'where is the target handler',
+        token_count: 999,
+        matched_nodes: [
+          {
+            node_id: 'target_handler',
+            label: 'targetHandler',
+            source_file: '/src/target.ts',
+            line_number: 10,
+            node_kind: 'function',
+            file_type: 'code',
+            snippet: [
+              'beforeOne()',
+              'beforeTwo()',
+              'TARGET()',
+              'afterOne()',
+              'afterTwo()',
+            ].join('\n'),
+            match_score: 10,
+            relevance_band: 'direct',
+            community: 0,
+            community_label: 'Target',
+          },
+        ],
+        relationships: [],
+        community_context: [{ id: 0, label: 'Target', node_count: 1 }],
+        graph_signals: { god_nodes: [], bridge_nodes: [] },
+      }, {
+        snippetBudget: 1,
+        topNWithSnippet: 1,
+      })
+
+      expect(compactResult.matched_nodes[0]?.snippet).toContain('TARGET')
+      expect(compactResult.matched_nodes[0]?.snippet_truncated).toBe(true)
+    })
+
+    it('recomputes token_count for verbose retrieve payloads after snippet shaping', () => {
+      const verboseResult = withRetrieveSnippetBudget({
+        question: 'how does auth work',
+        token_count: 999,
+        matched_nodes: [
+          {
+            label: 'AuthController',
+            source_file: '/src/auth/controller.ts',
+            line_number: 12,
+            file_type: 'code',
+            snippet: 'export async function authController() {\n  return token token token token token\n}',
+            match_score: 10,
+            relevance_band: 'direct',
+            community: 0,
+            community_label: 'Auth',
+          },
+          {
+            label: 'AuthService',
+            source_file: '/src/auth/service.ts',
+            line_number: 24,
+            file_type: 'code',
+            snippet: 'export async function authService() {\n  return token token token token token\n}',
+            match_score: 9,
+            relevance_band: 'related',
+            community: 0,
+            community_label: 'Auth',
+          },
+        ],
+        relationships: [
+          { from: 'AuthController', to: 'AuthService', relation: 'calls' },
+        ],
+        community_context: [{ id: 0, label: 'Auth', node_count: 2 }],
+        graph_signals: { god_nodes: [], bridge_nodes: [] },
+      }, {
+        snippetBudget: 4,
+        topNWithSnippet: 1,
+      })
+
+      const verboseTokenCount = verboseResult.matched_nodes.reduce((total, node) => {
+        const nodeText = `${node.label} ${node.source_file}:${node.line_number} ${node.snippet ?? ''}`
+        return total + estimateQueryTokens(nodeText)
+      }, 0)
+      const originalVerboseNodeTokenCount = [
+        estimateQueryTokens(
+          'AuthController /src/auth/controller.ts:12 export async function authController() {\n  return token token token token token\n}',
+        ),
+        estimateQueryTokens(
+          'AuthService /src/auth/service.ts:24 export async function authService() {\n  return token token token token token\n}',
+        ),
+      ].reduce((total, count) => total + count, 0)
+
+      expect(verboseResult.token_count).toBe(999 - originalVerboseNodeTokenCount + verboseTokenCount)
+      expect(verboseResult.token_count).toBeLessThan(999)
+      expect(verboseResult.snippet_budget_tokens_used).toBeLessThanOrEqual(4)
     })
 
     it('drops relationships for truncated same-label nodes during compact serialization', () => {

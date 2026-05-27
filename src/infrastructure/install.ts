@@ -2,6 +2,12 @@ import { existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, statSync, unlin
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { getBuiltInSkillContent } from './install-skill-templates.js'
+import {
+  renderMarkdownCodexRoutingTable,
+  renderMarkdownMcpRoutingTable,
+  renderPlainCodexRoutingGuide,
+  renderPlainMcpRoutingGuide,
+} from './install-routing-guidance.js'
 import { buildPromptApplicabilityHookCommand } from '../runtime/task-applicability.js'
 import {
   findPackageRoot as resolvePackageRoot,
@@ -26,6 +32,8 @@ export const MCP_TOOL_PROFILES = ['core', 'full'] as const
 export type McpToolProfile = (typeof MCP_TOOL_PROFILES)[number]
 export const INSTALL_PROFILES = [...MCP_TOOL_PROFILES, 'strict'] as const
 export type InstallProfile = (typeof INSTALL_PROFILES)[number]
+const MANAGED_HOOK_NAME = 'madar'
+const MANAGED_HOOK_SOURCE = 'madar'
 
 interface InstallPlatformConfig {
   skillFile: string
@@ -173,8 +181,18 @@ function isMadarCodexHookCommand(command: string): boolean {
 }
 
 function isMadarProjectHookPayload(payload: string): boolean {
-  return payload.includes('"additionalContext"')
-    && (payload.includes(RETRIEVE_FIRST_MESSAGE) || payload.includes(STRICT_CONTEXT_PACK_MESSAGE))
+  if (!payload.includes('"additionalContext"')) {
+    return false
+  }
+
+  const retrieveFirstSignature =
+    payload.includes('STOP. This project has a madar knowledge graph.')
+    && payload.includes('Do not use Glob, Grep, Bash, Read, or Agent tools first.')
+  const strictSignature =
+    payload.includes('strict compact MCP')
+    && payload.includes('context_pack')
+
+  return retrieveFirstSignature || strictSignature
 }
 
 function isMadarProjectHookCommand(command: string): boolean {
@@ -184,13 +202,30 @@ function isMadarProjectHookCommand(command: string): boolean {
   )
 }
 
-function isMadarProjectHook(hook: unknown, matcher?: string): boolean {
+function hasMadarHookSentinel(hook: Record<string, unknown>): boolean {
+  return hook.source === MANAGED_HOOK_SOURCE
+    || (typeof hook.source === 'string' && hook.source.startsWith(`${MANAGED_HOOK_SOURCE}:`))
+}
+
+function withManagedHookIdentity<T extends Record<string, unknown>>(hook: T): T & { name: string; source: string } {
+  return {
+    ...hook,
+    name: MANAGED_HOOK_NAME,
+    source: MANAGED_HOOK_SOURCE,
+  }
+}
+
+export function isMadarProjectHook(hook: unknown, matcher?: string): boolean {
   if (!isRecord(hook) || !Array.isArray(hook.hooks)) {
     return false
   }
 
   if (matcher !== undefined && hook.matcher !== matcher) {
     return false
+  }
+
+  if (hasMadarHookSentinel(hook)) {
+    return true
   }
 
   return hook.hooks.some(
@@ -216,17 +251,61 @@ function isMadarCodexHook(hook: unknown): boolean {
   )
 }
 
-const MCP_ROUTING_GUIDANCE =
-  'Use the graph tool that matches the question: retrieve for direct codebase questions, relevant_files for where to open first, feature_map for the main areas and entry points, risk_map before editing, implementation_checklist for edit order and validation, and impact for blast radius.'
+function strictNonMadarMcpRule(markdown: boolean): string {
+  if (markdown) {
+    return 'For codebase questions, use Madar tools only. Do not call other MCP servers such as `mcp__github` or `mcp__context7` unless the latest Madar response says `evidence.agent_directive: explore_with_caution`.'
+  }
+
+  return 'for codebase questions, use Madar tools only; do not call other MCP servers such as mcp__github or mcp__context7 unless the latest Madar response says evidence.agent_directive: explore_with_caution'
+}
+
+function strictSkillOverrideRule(markdown: boolean): string {
+  if (markdown) {
+    return 'If an auto-activated skill recommends broad `Read` / `Grep` / `Glob` exploration or another MCP for a codebase question, defer to Madar\'s `evidence.agent_directive` first. A high- or medium-confidence Madar pack overrides that conflicting skill guidance.'
+  }
+
+  return 'if an auto-activated skill recommends broad Read / Grep / Glob exploration or another MCP for a codebase question, defer to Madar\'s evidence.agent_directive first; a high- or medium-confidence Madar pack overrides that conflicting skill guidance'
+}
+function strictContextPackStopRule(markdown: boolean): string {
+  if (markdown) {
+    return 'After calling a Madar tool, inspect the response\'s `evidence.agent_directive`: `answer_from_pack` means answer using the pack snippets and you may `Read` at most ONE file for verification; `verify_one_targeted_file` means answer using the pack and `Read` at most one specific supporting file; `explore_with_caution` means the pack is partial and permits at most ONE targeted `Glob` or `Grep` scoped to a single directory.'
+  }
+
+  return 'after calling a Madar tool, inspect the response\'s evidence.agent_directive: answer_from_pack means answer using the pack snippets and you may Read at most ONE file for verification; verify_one_targeted_file means answer using the pack and Read at most one specific supporting file; explore_with_caution means the pack is partial and permits at most ONE targeted Glob or Grep scoped to a single directory'
+}
+
+function strictContextPackExpandRule(markdown: boolean): string {
+  if (markdown) {
+    return 'Only widen exploration for deeper verification when `evidence.agent_directive` is `explore_with_caution`; if `missing_context` or `missing_semantic` is still non-empty, use at most ONE targeted `Glob` or `Grep` scoped to a single directory before answering.'
+  }
+
+  return 'only widen exploration for deeper verification when evidence.agent_directive is explore_with_caution; if missing_context or missing_semantic is still non-empty, use at most ONE targeted Glob or Grep scoped to a single directory before answering'
+}
+
+function strictGraphReportFallbackRule(markdown: boolean): string {
+  if (markdown) {
+    return 'Do not open `out/GRAPH_REPORT.md` unless the context pack or graph tools are unavailable, stale, or insufficient. Treat it as a fallback before broader raw file exploration, not a default first read.'
+  }
+
+  return 'do not open out/GRAPH_REPORT.md unless the context pack or graph tools are unavailable, stale, or insufficient; treat it as a fallback before broader raw file exploration, not a default first read'
+}
+
+function strictContextPackNoBroadExplorationRule(markdown: boolean): string {
+  if (markdown) {
+    return 'Do not run broad `Glob` patterns, repo-wide `grep` / `find` searches, or raw file sweeps after a high- or medium-confidence pack.'
+  }
+
+  return 'do not run broad glob patterns, repo-wide grep / find searches, or raw file sweeps after a high- or medium-confidence pack'
+}
 
 const RETRIEVE_FIRST_MESSAGE =
-  `STOP. This project has a madar knowledge graph. ${MCP_ROUTING_GUIDANCE} Madar answers most codebase questions in 1 focused MCP call instead of 5–10 sequential file reads (3x fewer turns, ~2.8x faster on a real production codebase). Do not use Glob, Grep, Bash, Read, or Agent tools first. Only fall back to raw file tools if the graph tools cannot answer the question or the MCP server is unavailable.`
+  `STOP. This project has a madar knowledge graph. ${renderPlainMcpRoutingGuide()} Use the graph result as the first bounded pass for codebase questions, then validate with focused reads or tests when the graph is insufficient. ${strictNonMadarMcpRule(false)}. ${strictSkillOverrideRule(false)}. Do not use Glob, Grep, Bash, Read, or Agent tools first. Only fall back to raw file tools if the graph tools cannot answer the question or the MCP server is unavailable.`
 
 const STRICT_CONTEXT_PACK_MESSAGE =
-  'STOP. This project has a madar knowledge graph. Use strict compact MCP mode: call context_pack once for the task before broader exploration, answer from the pack when coverage is complete, only expand with context_expand or focused graph tools when diagnostics show missing evidence, and avoid raw file search unless the pack is insufficient.'
+  `STOP. This project has a madar knowledge graph. Use strict compact MCP mode: call context_pack once for the task before broader exploration, ${strictContextPackStopRule(false)}, ${strictContextPackNoBroadExplorationRule(false)}, ${strictNonMadarMcpRule(false)}, ${strictSkillOverrideRule(false)}, ${strictContextPackExpandRule(false)}, and ${strictGraphReportFallbackRule(false)}.`
 
 const CODEX_CONTEXT_PACK_FIRST_MESSAGE =
-  `STOP. This project has a madar knowledge graph. Follow the Codex context-pack-first workflow: run madar pack "<task or question>" --task explain before broad Bash search, raw file reads, or spawning workers. Use --task review, --task debug, or --task impact when that better matches the work. If MCP graph tools are available, use retrieve, relevant_files, feature_map, risk_map, implementation_checklist, or impact to refine the pack. Only fall back to raw file tools when the context pack or graph tools are missing, stale, or insufficient; read out/GRAPH_REPORT.md before expanding manually.`
+  `STOP. This project has a madar knowledge graph. Follow the Codex context-pack-first workflow: run madar pack "<task or question>" --task explain before broad Bash search, raw file reads, or spawning workers. Use --task review, --task debug, or --task impact when that better matches the work. ${renderPlainCodexRoutingGuide()} ${strictContextPackNoBroadExplorationRule(false)}. ${strictNonMadarMcpRule(false)}. ${strictSkillOverrideRule(false)}. If MCP graph tools are available, use retrieve, relevant_files, feature_map, risk_map, implementation_checklist, impact, or graph_summary to refine the pack. ${strictGraphReportFallbackRule(false)}.`
 
 const SETTINGS_HOOK = {
   // SECURITY: Keep this command static. Do not interpolate user-controlled input here.
@@ -250,7 +329,7 @@ const CODEX_HOOK = {
   // SECURITY: Keep this command static. Do not interpolate user-controlled input here.
   hooks: {
     PreToolUse: [
-      {
+      withManagedHookIdentity({
         matcher: 'Bash',
         hooks: [
           {
@@ -266,7 +345,7 @@ const CODEX_HOOK = {
             ),
           },
         ],
-      },
+      }),
     ],
   },
 }
@@ -298,16 +377,14 @@ const CLAUDE_MD_SECTION = `${SECTION_MARKER}
 IMPORTANT: This project has a madar knowledge graph. You MUST follow these rules:
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
-2. **BEFORE answering a codebase question that needs local code context**, start with the graph tool that matches the question:
-   - \`retrieve\` for "how does X work?" and other direct codebase questions
-   - \`relevant_files\` for "which files should I open first?"
-   - \`feature_map\` for "what parts of the codebase are involved?"
-   - \`risk_map\` before editing to see likely hotspots
-   - \`implementation_checklist\` for edit order and validation checkpoints
-   - \`impact\` for "what breaks if I change X?"
+2. **BEFORE answering a codebase question that needs local code context**, use the specific Madar MCP tool below first.
+
+${renderMarkdownMcpRoutingTable()}
 3. **Do NOT use Glob, Grep, Bash, Read, or dispatch Agent/Explore subagents first** for codebase questions.
-4. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. In that case, read out/GRAPH_REPORT.md first.
-5. **Do NOT dispatch Explore or research agents** for codebase questions — the knowledge graph already has the structural context they would spend tokens discovering.
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. ${strictGraphReportFallbackRule(true)}
+7. **Do NOT dispatch Explore or research agents** for codebase questions — the knowledge graph already has the structural context they would spend tokens discovering.
 `
 
 const STRICT_CLAUDE_MD_SECTION = `${SECTION_MARKER}
@@ -316,9 +393,12 @@ IMPORTANT: This project has a madar knowledge graph. You MUST follow these stric
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
 2. **Call \`context_pack\` once for the task before broader exploration.**
-3. **Answer from the pack when coverage is complete.**
-4. **Only expand with graph/search tools when diagnostics show missing evidence.** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\` only when the pack is insufficient.
-5. **Avoid raw file search unless the pack is insufficient.** If manual expansion is still required, read \`out/GRAPH_REPORT.md\` first.
+3. **${strictContextPackStopRule(true)}**
+4. **${strictContextPackNoBroadExplorationRule(true)}**
+5. **${strictNonMadarMcpRule(true)}**
+6. **${strictSkillOverrideRule(true)}**
+7. **${strictContextPackExpandRule(true)}** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\`.
+8. **${strictGraphReportFallbackRule(true)}**
 `
 
 const AGENTS_MD_SECTION = `${SECTION_MARKER}
@@ -326,15 +406,13 @@ const AGENTS_MD_SECTION = `${SECTION_MARKER}
 IMPORTANT: This project has a madar knowledge graph. You MUST follow these rules:
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
-2. **BEFORE answering a codebase question that needs local code context**, start with the graph tool that matches the question:
-   - \`retrieve\` for "how does X work?" and other direct codebase questions
-   - \`relevant_files\` for "which files should I open first?"
-   - \`feature_map\` for "what parts of the codebase are involved?"
-   - \`risk_map\` before editing to see likely hotspots
-   - \`implementation_checklist\` for edit order and validation checkpoints
-   - \`impact\` for "what breaks if I change X?"
+2. **BEFORE answering a codebase question that needs local code context**, use the specific Madar MCP tool below first.
+
+${renderMarkdownMcpRoutingTable()}
 3. **Do NOT search the codebase with other tools first** for codebase questions.
-4. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. In that case, read out/GRAPH_REPORT.md first.
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. ${strictGraphReportFallbackRule(true)}
 `
 
 const AIDER_AGENTS_MD_SECTION = `${SECTION_MARKER}
@@ -347,11 +425,14 @@ IMPORTANT: This project has a madar knowledge graph. Use a strict context-pack-f
 2. **Before broad code search or manual file expansion**, compile a task-specific context pack:
    - \`madar pack "<task or question>" --task explain\`
    - use \`--task review\`, \`--task debug\`, or \`--task impact\` when that better matches the work
-3. **Regenerate before expanding manually** when the pack is stale or missing:
+3. **${strictContextPackNoBroadExplorationRule(true)}**
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. **Regenerate before expanding manually** when the pack is stale or missing:
    - run \`madar generate .\`
-   - if you still need raw file reads, inspect \`out/GRAPH_REPORT.md\` first
-4. **This profile writes AGENTS.md only.** Aider does not get an auto-installed MCP server or hook from this installer, so the AGENTS.md rule plus explicit \`madar pack\` calls are the enforcement mechanism.
-5. **Uninstall behavior:** run \`madar aider uninstall\` to remove this AGENTS.md section while preserving unrelated content.
+   - ${strictGraphReportFallbackRule(true)}
+7. **This profile writes AGENTS.md only.** Aider does not get an auto-installed MCP server or hook from this installer, so the AGENTS.md rule plus explicit \`madar pack\` calls are the enforcement mechanism.
+8. **Uninstall behavior:** run \`madar aider uninstall\` to remove this AGENTS.md section while preserving unrelated content.
 
 Manual verification:
 
@@ -374,16 +455,23 @@ IMPORTANT: This project has a madar knowledge graph. Use a strict context-pack-f
 2. **Before broad code search, file reads, or worker dispatch**, compile a task-specific context pack:
    - \`madar pack "<task or question>" --task explain\`
    - use \`--task review\`, \`--task debug\`, or \`--task impact\` when that better matches the work
-3. If MCP graph tools are available, use the focused tool that matches the question after the pack:
+3. **For each codebase question, start with the specific Madar command below first.**
+
+${renderMarkdownCodexRoutingTable()}
+4. **${strictContextPackNoBroadExplorationRule(true)}**
+5. **${strictNonMadarMcpRule(true)}**
+6. **${strictSkillOverrideRule(true)}**
+7. If MCP graph tools are available after the pack, use the focused tool that matches the next question:
    - \`retrieve\` for direct codebase questions
    - \`relevant_files\` for where to open first
    - \`feature_map\` for involved areas and entry points
    - \`risk_map\` before editing
    - \`implementation_checklist\` for edit order and validation checkpoints
    - \`impact\` for blast radius
-4. **Only fall back to raw file tools** when the context pack or graph tools are missing, stale, or insufficient. In that case, read \`out/GRAPH_REPORT.md\` first.
-5. **Do not dispatch \`spawn_agent\` workers first** for codebase discovery. Let the context pack define likely entry files, risks, and missing context before parallel work.
-6. **Uninstall behavior:** run \`madar codex uninstall\` to remove this AGENTS.md section and the madar Codex hook from \`.codex/hooks.json\` while preserving unrelated content.
+   - \`graph_summary\` for repo overview
+8. **${strictGraphReportFallbackRule(true)}**
+9. **Do not dispatch \`spawn_agent\` workers first** for codebase discovery. Let the context pack define likely entry files, risks, and missing context before parallel work.
+10. **Uninstall behavior:** run \`madar codex uninstall\` to remove this AGENTS.md section and the madar Codex hook from \`.codex/hooks.json\` while preserving unrelated content.
 
 Manual verification:
 
@@ -405,16 +493,19 @@ IMPORTANT: This project has a madar knowledge graph. Use a strict context-pack-f
 2. **Before broad code search, bash-heavy exploration, or worker dispatch**, compile a task-specific context pack:
    - \`madar pack "<task or question>" --task explain\`
    - use \`--task review\`, \`--task debug\`, or \`--task impact\` when that better matches the work
-3. After the pack, use MCP graph tools when available inside OpenCode:
+3. **${strictContextPackNoBroadExplorationRule(true)}**
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. After the pack, use MCP graph tools when available inside OpenCode:
    - \`retrieve\` for direct codebase questions
    - \`relevant_files\` for where to open first
    - \`feature_map\` for involved areas and entry points
    - \`risk_map\` before editing
    - \`implementation_checklist\` for edit order and validation checkpoints
    - \`impact\` for blast radius
-4. **Install artifacts:** this profile writes this AGENTS.md section, \`.opencode/plugins/madar.js\`, and the madar MCP server entry in \`opencode.json\` or \`opencode.jsonc\`.
-5. **Only fall back to raw file tools** when the context pack or graph tools are missing, stale, or insufficient. In that case, read \`out/GRAPH_REPORT.md\` first.
-6. **Uninstall behavior:** run \`madar opencode uninstall\` to remove the madar AGENTS.md section, plugin entry, plugin file, and madar MCP config while preserving unrelated content.
+7. **Install artifacts:** this profile writes this AGENTS.md section, \`.opencode/plugins/madar.js\`, and the madar MCP server entry in \`opencode.json\` or \`opencode.jsonc\`.
+8. **${strictGraphReportFallbackRule(true)}**
+9. **Uninstall behavior:** run \`madar opencode uninstall\` to remove the madar AGENTS.md section, plugin entry, plugin file, and madar MCP config while preserving unrelated content.
 
 Manual verification:
 
@@ -432,15 +523,13 @@ const GEMINI_MD_SECTION = `${SECTION_MARKER}
 IMPORTANT: This project has a madar knowledge graph. You MUST follow these rules:
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
-2. **BEFORE answering a codebase question that needs local code context**, start with the graph tool that matches the question:
-   - \`retrieve\` for "how does X work?" and other direct codebase questions
-   - \`relevant_files\` for "which files should I open first?"
-   - \`feature_map\` for "what parts of the codebase are involved?"
-   - \`risk_map\` before editing to see likely hotspots
-   - \`implementation_checklist\` for edit order and validation checkpoints
-   - \`impact\` for "what breaks if I change X?"
+2. **BEFORE answering a codebase question that needs local code context**, use the specific Madar MCP tool below first.
+
+${renderMarkdownMcpRoutingTable()}
 3. **Do NOT search the codebase with other tools first** for codebase questions.
-4. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. In that case, read out/GRAPH_REPORT.md first.
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. ${strictGraphReportFallbackRule(true)}
 `
 
 const STRICT_GEMINI_MD_SECTION = `${SECTION_MARKER}
@@ -449,9 +538,12 @@ IMPORTANT: This project has a madar knowledge graph. Use strict compact MCP guid
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
 2. **Call \`context_pack\` once for the task before broader exploration.**
-3. **Answer from the pack when coverage is complete.**
-4. **Only expand with graph/search tools when diagnostics show missing evidence.** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\` only when the pack is insufficient.
-5. **Avoid raw file search unless the pack is insufficient.** If manual expansion is still required, read \`out/GRAPH_REPORT.md\` first.
+3. **${strictContextPackStopRule(true)}**
+4. **${strictContextPackNoBroadExplorationRule(true)}**
+5. **${strictNonMadarMcpRule(true)}**
+6. **${strictSkillOverrideRule(true)}**
+7. **${strictContextPackExpandRule(true)}** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\`.
+8. **${strictGraphReportFallbackRule(true)}**
 `
 
 const SKILL_REGISTRATION_MARKER = '- **madar**'
@@ -463,6 +555,8 @@ const OPENCODE_JSON_CONFIG_PATH = 'opencode.json'
 const OPENCODE_JSONC_CONFIG_PATH = 'opencode.jsonc'
 const OPENCODE_MCP_SERVER_NAME = 'madar'
 const CURSOR_RULE_RELATIVE_PATH = '.cursor/rules/madar.mdc'
+const OPENCODE_PLUGIN_REMINDER_COMMAND =
+  `echo "[madar] Knowledge graph available. ${renderPlainMcpRoutingGuide()} ${strictNonMadarMcpRule(false).replace(/^for/, 'For')}. ${strictSkillOverrideRule(false)}. ${strictGraphReportFallbackRule(false).replace(/^do/, 'Do')}" && `
 const OPENCODE_PLUGIN_JS = `// madar OpenCode plugin
 // Injects a knowledge graph reminder before bash tool calls when the graph exists.
 import { existsSync } from "fs";
@@ -478,7 +572,7 @@ export const MadarPlugin = async ({ directory }) => {
 
       if (input.tool === "bash") {
           output.args.command =
-            'echo "[madar] Knowledge graph available. Use the graph tool that matches the question: retrieve, relevant_files, feature_map, risk_map, implementation_checklist, or impact. Read out/GRAPH_REPORT.md before raw file search if needed." && ' +
+            ${JSON.stringify(OPENCODE_PLUGIN_REMINDER_COMMAND)} +
             output.args.command;
         reminded = true;
       }
@@ -495,15 +589,13 @@ alwaysApply: true
 IMPORTANT: This project has a madar knowledge graph.
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
-2. **BEFORE answering a codebase question that needs local code context**, start with the graph tool that matches the question:
-   - \`retrieve\` for "how does X work?" and other direct codebase questions
-   - \`relevant_files\` for "which files should I open first?"
-   - \`feature_map\` for "what parts of the codebase are involved?"
-   - \`risk_map\` before editing to see likely hotspots
-   - \`implementation_checklist\` for edit order and validation checkpoints
-   - \`impact\` for "what breaks if I change X?"
+2. **BEFORE answering a codebase question that needs local code context**, use the specific Madar MCP tool below first.
+
+${renderMarkdownMcpRoutingTable()}
 3. **Do NOT search the codebase with other tools first** for codebase questions.
-4. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. In that case, read out/GRAPH_REPORT.md first.
+4. **${strictNonMadarMcpRule(true)}**
+5. **${strictSkillOverrideRule(true)}**
+6. **Only fall back to raw file tools** if the graph tools cannot answer the question or the MCP server is unavailable. ${strictGraphReportFallbackRule(true)}
 `
 
 const STRICT_CURSOR_RULE = `---
@@ -515,9 +607,12 @@ IMPORTANT: This project has a madar knowledge graph. Use strict compact MCP guid
 
 1. **First decide whether the task needs local repository source-code context.** Only use madar when the task needs local repository source-code context. Skip madar for GitHub Projects board reviews, external URL/WebFetch-only tasks, \`gh auth\` / \`gh project\` setup, package-registry/security pages, and Product Hunt or marketing copy work.
 2. **Call \`context_pack\` once for the task before broader exploration.**
-3. **Answer from the pack when coverage is complete.**
-4. **Only expand with graph/search tools when diagnostics show missing evidence.** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\` only when the pack is insufficient.
-5. **Avoid raw file search unless the pack is insufficient.** If manual expansion is still required, read \`out/GRAPH_REPORT.md\` first.
+3. **${strictContextPackStopRule(true)}**
+4. **${strictContextPackNoBroadExplorationRule(true)}**
+5. **${strictNonMadarMcpRule(true)}**
+6. **${strictSkillOverrideRule(true)}**
+7. **${strictContextPackExpandRule(true)}** Use \`context_expand\` first, then focused graph tools such as \`retrieve\`, \`relevant_files\`, \`feature_map\`, \`risk_map\`, \`implementation_checklist\`, or \`impact\`.
+8. **${strictGraphReportFallbackRule(true)}**
 `
 
 function claudeMdSection(profile?: InstallProfile): string {
@@ -533,7 +628,7 @@ function cursorRule(profile?: InstallProfile): string {
 }
 
 function settingsHook(profile?: InstallProfile): Record<string, unknown> {
-  return {
+  return withManagedHookIdentity({
     hooks: [
       {
         type: 'command',
@@ -548,11 +643,11 @@ function settingsHook(profile?: InstallProfile): Record<string, unknown> {
         ),
       },
     ],
-  }
+  })
 }
 
 function geminiHook(profile?: InstallProfile): Record<string, unknown> {
-  return {
+  return withManagedHookIdentity({
     matcher: 'read_file|list_directory|search_for_pattern',
     hooks: [
       {
@@ -566,7 +661,7 @@ function geminiHook(profile?: InstallProfile): Record<string, unknown> {
         ),
       },
     ],
-  }
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1646,7 +1741,7 @@ function uninstallGeminiHook(projectDir: string): string | undefined {
   const settings = readJsonObject(settingsPath)
   const hooks = ensureRecord(settings, 'hooks')
   const beforeTool = ensureArray(hooks, 'BeforeTool')
-  const filtered = beforeTool.filter((hook) => !JSON.stringify(hook).includes('out'))
+  const filtered = beforeTool.filter((hook) => !isMadarProjectHook(hook, 'read_file|list_directory|search_for_pattern'))
 
   if (filtered.length === beforeTool.length) {
     return undefined
@@ -1914,7 +2009,7 @@ export function geminiInstall(projectDir = '.', options: GeminiInstallOptions = 
   const resolvedProjectDir = resolve(projectDir)
   const messages = [installSkill('gemini', options), writeSection(join(resolvedProjectDir, 'GEMINI.md'), geminiMdSection(options.profile)), installGeminiHook(resolvedProjectDir, options.profile)]
   if (options.profile === 'strict') {
-    messages.push('', 'Gemini CLI will now use the madar strict compact MCP profile:', 'call context_pack once, answer from the pack when coverage is complete, and expand only when diagnostics show missing evidence.')
+    messages.push('', 'Gemini CLI will now use the madar strict compact MCP profile:', `call context_pack once, ${strictContextPackStopRule(false)}, ${strictContextPackNoBroadExplorationRule(false)}, ${strictContextPackExpandRule(false)}, and ${strictGraphReportFallbackRule(false)}.`)
   } else {
     messages.push('', 'Gemini CLI will now check the knowledge graph before answering', 'codebase questions and rebuild it after code changes.')
   }
@@ -1939,8 +2034,9 @@ export function geminiUninstall(projectDir = '.', options: Pick<InstallSkillOpti
 export function installCopilotMcp(projectDir = '.', options: McpInstallOptions = {}, packageRoot = findPackageRoot()): string {
   const message = installMcpServer(resolve(projectDir), 'copilot', process.platform, options, resolve(packageRoot))
   if (options.profile === 'strict') {
-    return `${message}\n\nGitHub Copilot will now use the madar strict compact MCP profile: call context_pack once, answer from the pack when coverage is complete, and expand only when diagnostics show missing evidence.`
+    return `${message}\n\nGitHub Copilot will now use the madar strict compact MCP profile: call context_pack once, ${strictContextPackStopRule(false)}, ${strictContextPackNoBroadExplorationRule(false)}, ${strictContextPackExpandRule(false)}, and ${strictGraphReportFallbackRule(false)}.`
   }
+
   return message
 }
 
@@ -1970,7 +2066,7 @@ export function cursorInstall(projectDir = '.', options: McpInstallOptions = {})
 
   messages.push(installMcpServer(resolvedProjectDir, 'cursor', process.platform, options))
   if (options.profile === 'strict') {
-    messages.push('', 'Cursor will now use the madar strict compact MCP profile before broader exploration.')
+    messages.push('', 'Cursor will now use the madar strict compact MCP profile:', `call context_pack once, ${strictContextPackStopRule(false)}, ${strictContextPackNoBroadExplorationRule(false)}, ${strictContextPackExpandRule(false)}, and ${strictGraphReportFallbackRule(false)}.`)
   }
   return messages.join('\n')
 }
@@ -2003,7 +2099,7 @@ export function claudeInstall(projectDir = '.', options: McpInstallOptions = {})
     installMcpServer(resolvedProjectDir, 'claude', process.platform, options),
   ]
   if (options.profile === 'strict') {
-    messages.push('', 'Claude Code will now use the madar strict compact MCP profile:', 'call context_pack once, answer from the pack when coverage is complete, and expand only when diagnostics show missing evidence.')
+    messages.push('', 'Claude Code will now use the madar strict compact MCP profile:', `call context_pack once, ${strictContextPackStopRule(false)}, ${strictContextPackNoBroadExplorationRule(false)}, ${strictContextPackExpandRule(false)}, and ${strictGraphReportFallbackRule(false)}.`)
   } else {
     messages.push('', 'Claude Code will now start with the matching madar MCP tool', 'BEFORE searching raw files for any codebase question.')
   }

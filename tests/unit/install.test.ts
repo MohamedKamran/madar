@@ -24,6 +24,78 @@ import {
 import { normalizeAssertionPath, normalizeAssertionPaths } from './helpers/platform.js'
 
 const PACKAGE_CLI_RELATIVE_PATH = join('dist', 'src', 'cli', 'bin.js')
+const STRICT_STOP_RULE_MD =
+  'After calling a Madar tool, inspect the response\'s `evidence.agent_directive`: `answer_from_pack` means answer using the pack snippets and you may `Read` at most ONE file for verification; `verify_one_targeted_file` means answer using the pack and `Read` at most one specific supporting file; `explore_with_caution` means the pack is partial and permits at most ONE targeted `Glob` or `Grep` scoped to a single directory.'
+const STRICT_EXPAND_RULE_MD =
+  'Only widen exploration for deeper verification when `evidence.agent_directive` is `explore_with_caution`; if `missing_context` or `missing_semantic` is still non-empty, use at most ONE targeted `Glob` or `Grep` scoped to a single directory before answering.'
+const STRICT_GRAPH_REPORT_RULE_MD =
+  'Do not open `out/GRAPH_REPORT.md` unless the context pack or graph tools are unavailable, stale, or insufficient. Treat it as a fallback before broader raw file exploration, not a default first read.'
+const STRICT_NO_BROAD_EXPLORATION_RULE_MD =
+  'Do not run broad `Glob` patterns, repo-wide `grep` / `find` searches, or raw file sweeps after a high- or medium-confidence pack.'
+const STRICT_NON_MADAR_MCP_RULE_MD =
+  'For codebase questions, use Madar tools only. Do not call other MCP servers such as `mcp__github` or `mcp__context7` unless the latest Madar response says `evidence.agent_directive: explore_with_caution`.'
+const STRICT_SKILL_OVERRIDE_RULE_MD =
+  'If an auto-activated skill recommends broad `Read` / `Grep` / `Glob` exploration or another MCP for a codebase question, defer to Madar\'s `evidence.agent_directive` first. A high- or medium-confidence Madar pack overrides that conflicting skill guidance.'
+const STRICT_STOP_RULE_PLAIN =
+  'after calling a Madar tool, inspect the response\'s evidence.agent_directive: answer_from_pack means answer using the pack snippets and you may Read at most ONE file for verification; verify_one_targeted_file means answer using the pack and Read at most one specific supporting file; explore_with_caution means the pack is partial and permits at most ONE targeted Glob or Grep scoped to a single directory'
+const STRICT_EXPAND_RULE_PLAIN =
+  'only widen exploration for deeper verification when evidence.agent_directive is explore_with_caution; if missing_context or missing_semantic is still non-empty, use at most ONE targeted Glob or Grep scoped to a single directory before answering'
+const STRICT_GRAPH_REPORT_RULE_PLAIN =
+  'do not open out/GRAPH_REPORT.md unless the context pack or graph tools are unavailable, stale, or insufficient; treat it as a fallback before broader raw file exploration, not a default first read'
+const STRICT_GRAPH_REPORT_RULE_PLAIN_SENTENCE =
+  'Do not open out/GRAPH_REPORT.md unless the context pack or graph tools are unavailable, stale, or insufficient; treat it as a fallback before broader raw file exploration, not a default first read'
+const STRICT_NO_BROAD_EXPLORATION_RULE_PLAIN =
+  'do not run broad glob patterns, repo-wide grep / find searches, or raw file sweeps after a high- or medium-confidence pack'
+const STRICT_NON_MADAR_MCP_RULE_PLAIN =
+  'for codebase questions, use Madar tools only; do not call other MCP servers such as mcp__github or mcp__context7 unless the latest Madar response says evidence.agent_directive: explore_with_caution'
+const STRICT_NON_MADAR_MCP_RULE_PLAIN_SENTENCE =
+  'For codebase questions, use Madar tools only; do not call other MCP servers such as mcp__github or mcp__context7 unless the latest Madar response says evidence.agent_directive: explore_with_caution'
+const STRICT_SKILL_OVERRIDE_RULE_PLAIN =
+  'if an auto-activated skill recommends broad Read / Grep / Glob exploration or another MCP for a codebase question, defer to Madar\'s evidence.agent_directive first; a high- or medium-confidence Madar pack overrides that conflicting skill guidance'
+
+function expectMarkdownRoutingTable(content: string): void {
+  const normalized = content.replaceAll('\\"', '"')
+  expect(normalized).toContain('For each codebase question, use the specific Madar MCP tool below first:')
+  expect(normalized).toContain('| Prompt type')
+  expect(normalized).toContain('| "how does X work" / explain runtime / flow')
+  expect(normalized).toContain('| "what breaks if I change X" / impact analysis')
+  expect(normalized).toContain('| "which files should I open first"')
+  expect(normalized).toContain('| "give me a repo overview"')
+  expect(normalized).toContain('`context_pack`')
+  expect(normalized).toContain('`impact`')
+  expect(normalized).toContain('`relevant_files`')
+  expect(normalized).toContain('`graph_summary`')
+  expect(normalized).toContain('Do not run ToolSearch before calling a Madar tool')
+}
+
+function expectPlainRoutingGuide(content: string): void {
+  const normalized = content.replaceAll('\\"', '"')
+  expect(normalized).toContain('For each codebase question, call the matching Madar MCP tool directly first')
+  expect(normalized).toContain('context_pack for "how does X work?" / explain runtime / flow')
+  expect(normalized).toContain('impact for "what breaks if I change X?" / impact analysis')
+  expect(normalized).toContain('relevant_files for "which files should I open first?"')
+  expect(normalized).toContain('graph_summary for "give me a repo overview?"')
+  expect(normalized).toContain('Do not run ToolSearch before calling a Madar tool')
+}
+
+function expectCodexMarkdownRoutingTable(content: string): void {
+  const normalized = content.replaceAll('\\"', '"')
+  expect(normalized).toContain('For each codebase question, start with the specific Madar command below first:')
+  expect(normalized).toContain('| Prompt type')
+  expect(normalized).toContain('| "how does X work" / explain runtime / flow')
+  expect(normalized).toContain('| "what breaks if I change X" / impact analysis')
+  expect(normalized).toContain('| "which files should I open first"')
+  expect(normalized).toContain('| "give me a repo overview"')
+  expect(normalized).toContain('`madar pack "<task or question>" --task explain`')
+  expect(normalized).toContain('`madar pack "<task or question>" --task impact`')
+  expect(normalized).toContain('`relevant_files` when MCP graph tools are available')
+  expect(normalized).toContain('`graph_summary` when MCP graph tools are available')
+  expect(normalized).toContain('`retrieve` for direct codebase questions')
+  expect(normalized).toContain('`feature_map` for involved areas and entry points')
+  expect(normalized).toContain('`risk_map` before editing')
+  expect(normalized).toContain('`implementation_checklist` for edit order and validation checkpoints')
+  expect(normalized).toContain('Do not run ToolSearch before calling a Madar command or graph tool')
+}
 
 const BUNDLED_ASSET_CONTENT = {
   'skill.md': '# madar\n\nLocal bundled Claude skill\n',
@@ -142,11 +214,32 @@ function decodeHookPayloads(content: string): string {
   return decodedPayloads.join('\n')
 }
 
+function encodeGraphCheckedHookCommand(payload: Record<string, unknown>): string {
+  const b64 = Buffer.from(JSON.stringify(payload)).toString('base64')
+  return `node -e "try{require('fs').accessSync('out/graph.json');process.stdout.write(Buffer.from('${b64}','base64').toString())}catch(e){}"`
+}
+
 function extractHookCommand(settingsJson: string, eventName: string): string {
   const parsed = JSON.parse(settingsJson) as {
     hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>
   }
   return parsed.hooks?.[eventName]?.[0]?.hooks?.[0]?.command ?? ''
+}
+
+function extractHookEntry(settingsJson: string, eventName: string): Record<string, unknown> {
+  const parsed = JSON.parse(settingsJson) as {
+    hooks?: Record<string, Array<Record<string, unknown>>>
+  }
+  return parsed.hooks?.[eventName]?.[0] ?? {}
+}
+
+function extractCodexPreToolUseEntry(hooksJson: string): Record<string, unknown> {
+  const parsed = JSON.parse(hooksJson) as {
+    hooks?: {
+      PreToolUse?: Array<Record<string, unknown>>
+    }
+  }
+  return parsed.hooks?.PreToolUse?.[0] ?? {}
 }
 
 function shellCommandForPlatform(
@@ -408,6 +501,8 @@ describe('install helpers', () => {
           expect(readFileSync(join(projectDir, 'GEMINI.md'), 'utf8')).toContain('implementation_checklist')
           expect(readFileSync(join(projectDir, 'GEMINI.md'), 'utf8')).toContain('impact')
           expect(readFileSync(join(projectDir, 'GEMINI.md'), 'utf8')).toContain('Only use madar when the task needs local repository source-code context.')
+          expect(readFileSync(join(projectDir, 'GEMINI.md'), 'utf8')).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+          expectMarkdownRoutingTable(readFileSync(join(projectDir, 'GEMINI.md'), 'utf8'))
           expect(readFileSync(join(projectDir, '.gemini', 'settings.json'), 'utf8')).toContain('out')
 
           const uninstallMessage = geminiUninstall(projectDir, { homeDir })
@@ -428,9 +523,13 @@ describe('install helpers', () => {
       const geminiMd = readFileSync(join(projectDir, 'GEMINI.md'), 'utf8')
 
       expect(geminiMd).toContain('Call `context_pack` once for the task before broader exploration.')
-      expect(geminiMd).toContain('Answer from the pack when coverage is complete.')
-      expect(geminiMd).toContain('Only expand with graph/search tools when diagnostics show missing evidence.')
-      expect(geminiMd).toContain('Avoid raw file search unless the pack is insufficient.')
+      expect(geminiMd).toContain(STRICT_STOP_RULE_MD)
+      expect(geminiMd).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_MD)
+      expect(geminiMd).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(geminiMd).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
+      expect(geminiMd).toContain(STRICT_EXPAND_RULE_MD)
+      expect(geminiMd).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+      expect(geminiMd).not.toContain('If manual expansion is still required, read `out/GRAPH_REPORT.md` first.')
       expect(installMessage).toContain('strict compact MCP profile')
     })
   })
@@ -466,6 +565,11 @@ describe('install helpers', () => {
 
       expect(decodedHookPayload).toContain('strict compact MCP mode')
       expect(decodedHookPayload).toContain('call context_pack once for the task before broader exploration')
+      expect(decodedHookPayload).toContain(STRICT_STOP_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_SKILL_OVERRIDE_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_EXPAND_RULE_PLAIN)
       expect(decodedHookPayload).not.toContain('Madar answers most codebase questions in 1 focused MCP call')
     })
   })
@@ -485,7 +589,9 @@ describe('install helpers', () => {
       const installMessage = cursorInstall(projectDir)
       expect(normalizeAssertionPath(installMessage)).toContain('.cursor/rules/madar.mdc')
       expect(existsSync(join(projectDir, '.cursor', 'rules', 'madar.mdc'))).toBe(true)
-      expect(readFileSync(join(projectDir, '.cursor', 'rules', 'madar.mdc'), 'utf8')).toContain('alwaysApply: true')
+      const rule = readFileSync(join(projectDir, '.cursor', 'rules', 'madar.mdc'), 'utf8')
+      expect(rule).toContain('alwaysApply: true')
+      expectMarkdownRoutingTable(rule)
 
       const uninstallMessage = cursorUninstall(projectDir)
       expect(uninstallMessage).toContain('removed')
@@ -507,6 +613,9 @@ describe('install helpers', () => {
       expect(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8')).toContain('implementation_checklist')
       expect(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8')).toContain('impact')
       expect(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8')).toContain('Only use madar when the task needs local repository source-code context.')
+      expect(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8')).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8')).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
+      expectMarkdownRoutingTable(readFileSync(join(projectDir, 'CLAUDE.md'), 'utf8'))
 
       const uninstallMessage = claudeUninstall(projectDir)
       expect(uninstallMessage).toMatch(/madar section removed|CLAUDE\.md was empty after removal/)
@@ -543,7 +652,104 @@ describe('install helpers', () => {
       })
 
       expect(output).toContain('retrieve')
-      expect(output).toContain('3x fewer turns')
+      expect(output).not.toContain('3x fewer turns')
+      expect(output).not.toContain('2.8x faster')
+    })
+  })
+
+  it('updates a legacy Claude managed hook in place when reinstalling', () => {
+    withTempDir((projectDir) => {
+      mkdirSync(join(projectDir, '.claude'), { recursive: true })
+      mkdirSync(join(projectDir, 'out'), { recursive: true })
+      writeFileSync(join(projectDir, 'out', 'graph.json'), '{}', 'utf8')
+
+      const legacyPromptMessage =
+        'STOP. This project has a madar knowledge graph. Use the graph tool that matches the question: retrieve for direct codebase questions, relevant_files for where to open first, feature_map for the main areas and entry points, risk_map before editing, implementation_checklist for edit order and validation, and impact for blast radius. Madar answers most codebase questions in 1 focused MCP call instead of 5–10 sequential file reads (3x fewer turns, ~2.8x faster on a real production codebase). Do not use Glob, Grep, Bash, Read, or Agent tools first. Only fall back to raw file tools if the graph tools cannot answer the question or the MCP server is unavailable.'
+      const legacyHookCommand = encodeGraphCheckedHookCommand({
+        hookSpecificOutput: {
+          hookEventName: 'UserPromptSubmit',
+          additionalContext: legacyPromptMessage,
+        },
+      })
+      writeFileSync(join(projectDir, '.claude', 'settings.json'), JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [{
+            hooks: [{
+              type: 'command',
+              command: legacyHookCommand,
+            }],
+          }],
+        },
+      }, null, 2), 'utf8')
+
+      const message = claudeInstall(projectDir)
+      const settings = readFileSync(join(projectDir, '.claude', 'settings.json'), 'utf8')
+      const decodedPayloads = decodeHookPayloads(settings)
+
+      expect(message).toContain('hook updated')
+      expect(countOccurrences(settings, 'UserPromptSubmit')).toBe(1)
+      expect(decodedPayloads).not.toContain('3x fewer turns')
+      expect(decodedPayloads).toContain('Use the graph result as the first bounded pass')
+      expect(decodedPayloads).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN)
+      expect(decodedPayloads).toContain(STRICT_SKILL_OVERRIDE_RULE_PLAIN)
+    })
+  })
+
+  it('does not overwrite unrelated user Claude hooks that happen to be named madar', () => {
+    withTempDir((projectDir) => {
+      mkdirSync(join(projectDir, '.claude'), { recursive: true })
+      mkdirSync(join(projectDir, 'out'), { recursive: true })
+      writeFileSync(join(projectDir, 'out', 'graph.json'), '{}', 'utf8')
+      writeFileSync(join(projectDir, '.claude', 'settings.json'), JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [{
+            name: 'madar',
+            source: 'user-custom-hook',
+            matcher: 'prompt',
+            hooks: [{
+              type: 'command',
+              command: 'echo keep-user-hook',
+            }],
+          }],
+        },
+      }, null, 2), 'utf8')
+
+      const message = claudeInstall(projectDir)
+      const settings = JSON.parse(readFileSync(join(projectDir, '.claude', 'settings.json'), 'utf8')) as {
+        hooks?: {
+          UserPromptSubmit?: Array<Record<string, unknown>>
+        }
+      }
+      const entries = settings.hooks?.UserPromptSubmit ?? []
+
+      expect(message).toContain('registered')
+      expect(entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'madar',
+          source: 'user-custom-hook',
+        }),
+        expect.objectContaining({
+          name: 'madar',
+          source: 'madar',
+        }),
+      ]))
+      expect(entries).toHaveLength(2)
+    })
+  })
+
+  it('writes a stable `name: madar` sentinel into installed Claude, Gemini, and Codex hook entries', () => {
+    withTempDir((projectDir) => {
+      claudeInstall(projectDir)
+      geminiInstall(projectDir)
+      agentsInstall(projectDir, 'codex')
+
+      const claudeSettings = readFileSync(join(projectDir, '.claude', 'settings.json'), 'utf8')
+      const geminiSettings = readFileSync(join(projectDir, '.gemini', 'settings.json'), 'utf8')
+      const codexHooks = readFileSync(join(projectDir, '.codex', 'hooks.json'), 'utf8')
+
+      expect(extractHookEntry(claudeSettings, 'UserPromptSubmit').name).toBe('madar')
+      expect(extractHookEntry(geminiSettings, 'BeforeTool').name).toBe('madar')
+      expect(extractCodexPreToolUseEntry(codexHooks).name).toBe('madar')
     })
   })
 
@@ -636,9 +842,13 @@ describe('install helpers', () => {
 
       expect(mcpConfig.mcpServers?.['madar']?.env?.MADAR_TOOL_PROFILE).toBe('core')
       expect(claudeMd).toContain('Call `context_pack` once for the task before broader exploration.')
-      expect(claudeMd).toContain('Answer from the pack when coverage is complete.')
-      expect(claudeMd).toContain('Only expand with graph/search tools when diagnostics show missing evidence.')
-      expect(claudeMd).toContain('Avoid raw file search unless the pack is insufficient.')
+      expect(claudeMd).toContain(STRICT_STOP_RULE_MD)
+      expect(claudeMd).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_MD)
+      expect(claudeMd).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(claudeMd).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
+      expect(claudeMd).toContain(STRICT_EXPAND_RULE_MD)
+      expect(claudeMd).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+      expect(claudeMd).not.toContain('If manual expansion is still required, read `out/GRAPH_REPORT.md` first.')
       expect(installMessage).toContain('strict compact MCP profile')
     })
   })
@@ -675,9 +885,13 @@ describe('install helpers', () => {
 
       expect(mcpConfig.mcpServers?.['madar']?.env?.MADAR_TOOL_PROFILE).toBe('core')
       expect(rule).toContain('Call `context_pack` once for the task before broader exploration.')
-      expect(rule).toContain('Answer from the pack when coverage is complete.')
-      expect(rule).toContain('Only expand with graph/search tools when diagnostics show missing evidence.')
-      expect(rule).toContain('Avoid raw file search unless the pack is insufficient.')
+      expect(rule).toContain(STRICT_STOP_RULE_MD)
+      expect(rule).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_MD)
+      expect(rule).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(rule).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
+      expect(rule).toContain(STRICT_EXPAND_RULE_MD)
+      expect(rule).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+      expect(rule).not.toContain('If manual expansion is still required, read `out/GRAPH_REPORT.md` first.')
       expect(installMessage).toContain('strict compact MCP profile')
     })
   })
@@ -821,7 +1035,10 @@ describe('install helpers', () => {
       expect(mcpConfig.servers?.['madar']?.env?.MADAR_TOOL_PROFILE).toBe('core')
       expect(installMessage).toContain('strict compact MCP profile')
       expect(installMessage).toContain('call context_pack once')
-      expect(installMessage).toContain('expand only when diagnostics show missing evidence')
+      expect(installMessage).toContain(STRICT_STOP_RULE_PLAIN)
+      expect(installMessage).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_PLAIN)
+      expect(installMessage).toContain(STRICT_EXPAND_RULE_PLAIN)
+      expect(installMessage).toContain(STRICT_GRAPH_REPORT_RULE_PLAIN)
     })
   })
 
@@ -921,10 +1138,21 @@ describe('install helpers', () => {
       expect(agentsMd).toContain('Codex CLI profile')
       expect(agentsMd).toContain('context-pack-first')
       expect(agentsMd).toContain('madar pack')
+      expect(agentsMd).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_MD)
+      expect(agentsMd).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(agentsMd).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
       expect(agentsMd).toContain('madar codex uninstall')
       expect(agentsMd).toContain('Manual verification')
+      expect(agentsMd).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+      expectCodexMarkdownRoutingTable(agentsMd)
+      expect(agentsMd).not.toContain('Only fall back to raw file tools** when the context pack or graph tools are missing, stale, or insufficient. In that case, read `out/GRAPH_REPORT.md` first.')
       expect(decodedHookPayload).toContain('context-pack-first')
       expect(decodedHookPayload).toContain('madar pack')
+      expect(decodedHookPayload).toContain(STRICT_NO_BROAD_EXPLORATION_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_SKILL_OVERRIDE_RULE_PLAIN)
+      expect(decodedHookPayload).toContain(STRICT_GRAPH_REPORT_RULE_PLAIN)
+      expect(decodedHookPayload).not.toContain('read out/GRAPH_REPORT.md before expanding manually')
     })
   })
 
@@ -938,6 +1166,8 @@ describe('install helpers', () => {
       expect(agentsMd).toContain('Aider profile')
       expect(agentsMd).toContain('context-pack-first')
       expect(agentsMd).toContain('madar pack')
+      expect(agentsMd).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+      expect(agentsMd).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
       expect(agentsMd).toContain('madar aider uninstall')
       expect(agentsMd).toContain('Manual verification')
       expect(agentsMd).toContain('AGENTS.md')
@@ -955,10 +1185,20 @@ describe('install helpers', () => {
         expect(agentsMd).toContain('OpenCode profile')
         expect(agentsMd).toContain('context-pack-first')
         expect(agentsMd).toContain('madar pack')
+        expect(agentsMd).toContain(STRICT_NON_MADAR_MCP_RULE_MD)
+        expect(agentsMd).toContain(STRICT_SKILL_OVERRIDE_RULE_MD)
         expect(agentsMd).toContain('madar opencode uninstall')
         expect(agentsMd).toContain('Manual verification')
         expect(agentsMd).toContain('.opencode/plugins/madar.js')
         expect(agentsMd).toContain('opencode.json')
+        expect(agentsMd).toContain(STRICT_GRAPH_REPORT_RULE_MD)
+        expect(agentsMd).not.toContain('In that case, read `out/GRAPH_REPORT.md` first.')
+
+        const plugin = readFileSync(join(projectDir, '.opencode', 'plugins', 'madar.js'), 'utf8')
+        expect(plugin).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN_SENTENCE)
+        expect(plugin).toContain(STRICT_GRAPH_REPORT_RULE_PLAIN_SENTENCE)
+        expectPlainRoutingGuide(plugin)
+        expect(plugin).not.toContain('Read out/GRAPH_REPORT.md before raw file search if needed.')
       })
     })
   })
@@ -1017,6 +1257,8 @@ describe('install helpers', () => {
       expect(codexHooks).toContain('custom.log')
       expect(decodedHookPayload).toContain('context-pack-first')
       expect(decodedHookPayload).toContain('madar pack')
+      expect(decodedHookPayload).toContain(STRICT_GRAPH_REPORT_RULE_PLAIN)
+      expect(decodedHookPayload).not.toContain('read out/GRAPH_REPORT.md before expanding manually')
       expect(decodedHookPayload).not.toContain('Legacy out retrieve-first guidance')
     })
   })

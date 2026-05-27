@@ -1,6 +1,6 @@
 # madar
 
-**Stop making AI agents re-read your repo.** A local **context plane** and **context compiler** for Claude Code, Codex CLI, Copilot CLI, Cursor, Windsurf, and Aider — turn your TypeScript/Node workspace and PR diffs into compact, verifiable context packs.
+**Start AI coding agents with what runs for this task — the execution slice or structural subset worth reading first.** madar builds local graph artifacts and task-aware context packs for Claude Code, Codex CLI, Copilot CLI, Cursor, Windsurf, Aider, and other agent workflows.
 
 [![npm](https://img.shields.io/npm/v/%40lubab%2Fmadar)](https://www.npmjs.com/package/@lubab/madar)
 [![node >=20](https://img.shields.io/badge/node-%E2%89%A520-3c873a)](https://nodejs.org/)
@@ -19,7 +19,7 @@
 
 https://github.com/user-attachments/assets/a502185f-fa12-4a8f-80d2-172847f209fd
 
-30 seconds: install → `madar generate .` on the GoValidate repo (1,048 files) → `madar claude install --profile core` → `madar compare "Explain the auth flow End to End"`. Anthropic-reported on the same Claude Opus run: **31 → 14 turns (2.21× fewer)**, **170 s → 107 s (1.58× faster)**, **2,811,682 → 532,021 input tokens (5.28× fewer)**. Receipts: [`docs/benchmarks/2026-05-09-govalidate-auth-e2e/`](docs/benchmarks/2026-05-09-govalidate-auth-e2e/).
+30 seconds: install → `madar generate .` on the GoValidate repo (1,048 files) → `madar claude install --profile core` → `madar compare "Explain the auth flow End to End"`. The repo includes the saved artifact for that run plus the follow-up benchmark notes and caveats. Treat it as a worked receipt, not a universal benchmark headline. Receipts: [`docs/benchmarks/2026-05-09-govalidate-auth-e2e/`](docs/benchmarks/2026-05-09-govalidate-auth-e2e/).
 
 ---
 
@@ -39,7 +39,13 @@ madar status              # compact readiness summary + next commands
 madar generate . --spi
 ```
 
-Now ask Claude something about your codebase. It calls `retrieve` once, gets back labeled snippets with file paths and community context, and answers — instead of running multiple `Read` / `Grep` / `Glob` calls and accumulating tokens at every turn.
+Now ask Claude something about your codebase. It can start with one bounded `retrieve` or `context_pack` call, get labeled snippets with file paths and community context, and then decide whether focused follow-up reads are still needed.
+
+Want the opt-in semantic retrieval / rerank path too? Install the optional local model runtime in the same environment:
+
+```bash
+npm install @huggingface/transformers
+```
 
 **Other agents:**
 
@@ -56,9 +62,12 @@ madar opencode install    # OpenCode
 
 ```bash
 madar summary                             # bounded JSON overview before pack/prompt
-madar pack "how does auth work?" --task explain          # compact CLI context payload
+madar pack "how does auth work?" --task explain --format text   # human-readable execution brief
+madar pack "add auth telemetry" --task implement --format json  # Pack Schema v1 for automation
 madar prompt "how does auth work?" --provider claude     # provider-ready compiled prompt
 ```
+
+If you enable `--semantic` or `--rerank` without that optional package installed, madar now fails with an explicit install hint instead of pulling the transformer/native stack into every default install.
 
 Want a tiny reproducible workspace for local demos? Start with [`examples/sample-workspace/`](examples/sample-workspace/) and the [sample workspace tutorial](docs/tutorials/sample-workspace.md).
 
@@ -66,13 +75,13 @@ Want a broader local-first walkthrough that also covers install, `prompt`, and a
 
 ---
 
-## What's new in 0.26.1
+## What's new in 0.27.0-next.4
 
-- Context-pack prompts are better at turning review/explain flow into build flow: implement-mode guidance now shows up consistently in the MCP prompt surface, so implementation tasks get targeted next-step instructions instead of generic context-pack wording.
-- Install behavior is quieter and more intentional: the published package no longer runs a consumer `postinstall` hook, and Madar’s install guidance now skips itself by default for prompts that do not need local repository source-code context.
-- The release package is easier to audit: the production lockfile fixes the transitive `protobufjs` finding, and the shipped dependency review documents the remaining semantic-stack supply-chain tradeoffs plus the follow-up tracked in #290.
+- Managed install detection now matches the real generated hook shape: `madar compare` and `madar bench:suite` no longer mistake a fresh Claude install for a missing hook just because the managed command is base64-wrapped.
+- Installed Claude, Gemini, and Codex hooks now carry stable Madar identity markers, so compare/install/uninstall logic stays aligned on the same managed-hook contract across supported agent surfaces.
+- Native-agent install validation is more precise: compare now keeps hook matcher families distinct, which avoids treating the wrong managed hook type as a valid Claude install.
 
-See the [`0.26.1` changelog entry](CHANGELOG.md#0261---2026-05-24) for the full release notes.
+See the [`0.27.0-next.4` changelog entry](CHANGELOG.md#0270-next4---2026-05-27) for the full release notes.
 
 The larger **What's new in 0.23.0** additions are still part of the main flow too: `madar summary`, the core MCP `graph_summary` tool, runtime `execution_slice` output, share-safe `report.share-safe.json` compare artifacts, and `compare --baseline-mode pack_only`.
 
@@ -80,7 +89,7 @@ If you want the broader proof-oriented workflow behind the current surfaces, sta
 
 ### When to use `--spi`
 
-`--spi` is **still opt-in** in 0.26.1. Use it when your repo is framework-heavy TypeScript/JavaScript and you want the extra framework-shaped metadata plus disk cache behavior.
+`--spi` is **still opt-in** in 0.27.0-next.4. Use it when your repo is framework-heavy TypeScript/JavaScript and you want the extra framework-shaped metadata plus disk cache behavior.
 
 `--spi` is usually worth it for NestJS, Next.js App Router, Prisma, tRPC, Hono, Fastify, and similar repos where users ask storage-oriented prompts, client/server boundary questions, or request-flow questions. The default pipeline is still fine for simpler repos, non-JS/TS workspaces, or quick first runs when you do not need the extra framework detail yet.
 
@@ -88,9 +97,9 @@ If you want the broader proof-oriented workflow behind the current surfaces, sta
 
 ## What madar is
 
-Modern AI coding agents have one expensive habit: they discover your codebase from scratch every session. They `grep`, then `Read`, then summarize, then forget, then repeat — every prompt.
+A structural graph tells you what exists, but what the agent actually needs is **what runs for this task**, which is usually a much smaller set.
 
-madar fixes that loop. It indexes a TypeScript/Node workspace (and PR diffs) into a local knowledge graph, then compiles that graph into the **smallest verifiable context pack** the agent actually needs for the task at hand.
+madar indexes a TypeScript/Node workspace (and PR diffs) into local graph artifacts, then compiles those artifacts into a task-aware pack the agent can start from before it decides whether deeper reads are still necessary.
 
 ```
 your prompt
@@ -100,11 +109,25 @@ your prompt
         → AI coding agent
 ```
 
-When the agent says "tell me more," it expands a stable `handle_id` inside the same MCP session instead of re-reading the repo from scratch.
+When the agent says "tell me more," it expands a stable `handle_id` inside the same MCP session instead of reconstructing the same first-pass context from scratch.
+
+### Pack Schema v1
+
+`madar pack` now emits a stable **Pack Schema v1** envelope around the compiled evidence bundle. In JSON mode (`--format json`), the response includes `schema_version`, `task`, `task_intent`, `workflow_centers`, `recommended_first_read`, `likely_edit_files`, `likely_test_files`, `public_contracts`, `risk_boundaries`, `validation_commands`, `negative_guidance`, `confidence_score`, and `why_explanation`, alongside the existing `pack`, `coverage`, and planner metadata.
+
+For `--task implement`, `workflow_centers` are scored workflow-owner candidates with a `path`, numeric `score`, and structural `reasons`, so orchestration files can outrank lexically louder helpers when the brief recommends where to start editing.
+
+The implement brief also keeps `recommended_first_read` separate from ranked `likely_edit_files` and `likely_test_files`. The edit/test sections now carry explicit `score` and `reason` fields so agents can tell orientation reads apart from the files most likely to change or validate.
+
+`negative_guidance` is also task-aware now: implementation packs can explicitly call out helper-like or generated files as supporting context instead of silently letting lexical matches drift into the default edit path.
+
+Use `--format json` when another tool or script will consume the pack directly. Use `--format text` when you want the same schema rendered as a short human/agent-readable execution brief.
 
 ### Adaptive context-pack representations
 
 Compiled context packs now have a first-pass **rendering-only** adaptive layer. Retrieval still selects the same nodes and paths first; the runtime only changes how those already-selected nodes are emitted for the task.
+
+That renderer is now budget-aware: tighter budgets compress already-selected nodes down toward summary/signature views, while explain packs only preserve full detail when the budget is large enough to justify it.
 
 The current deterministic core modes are:
 
@@ -117,34 +140,50 @@ The current deterministic core modes are:
 
 That means the same selected nodes can render differently for `explain`, `review`, and `impact` work without changing retrieval selection. The tradeoff is explicit: lower-token renderings carry less raw implementation detail, while explain-oriented packs keep full code snippets when the runtime already has them.
 
-**What it's good at:**
-- Cutting per-session input tokens on codebase questions (measured 2.6× fewer on the GoValidate benchmark below).
-- PR review via `pr_impact` and `review-compare` — turns the *current git diff* into ranked review risks, structural hotspots, and likely test files (measured 7.25× smaller review prompt on a real PR).
-- Local-first by design: tree-sitter AST, BM25 retrieval, optional ONNX embeddings — all on your machine. Your code never leaves the laptop unless you explicitly invoke a model.
+**What it's good at today:**
+- Giving agents a bounded first pass for explain / review / impact work instead of starting from arbitrary repo-wide search.
+- Turning the current git diff into ranked review risks, structural hotspots, and likely test files with `pr_impact` and `review-compare`.
+- Producing deterministic, share-safe artifacts (`report.share-safe.json`, Pack Schema v1, static `execution_slice` output) that can be reviewed without sharing workstation paths.
+- Staying local-first: tree-sitter AST, BM25 retrieval, optional ONNX embeddings — all on your machine unless you explicitly invoke a model you configured yourself.
 
 > Deepest extraction is still **TypeScript/JavaScript** with framework-aware passes for Express, NestJS, Next.js, React Router, Redux Toolkit, **Hono, Fastify, tRPC, Prisma, and routing-controllers** (10 substrates via `--spi`). Python now has a conservative semantic layer for cross-file import/call resolution, FastAPI router composition plus route/dependency semantics, and first-pass Django URL-conf route-to-view mapping. Go now has a conservative first semantic pass for local-package import resolution, receiver/method call edges, and statically visible `net/http` / Gin / Chi route relationships. Ruby, Java, and Rust still use the tree-sitter AST baseline. C / Kotlin / C# / Scala / PHP / Swift / Zig use a generic structural extractor. Full matrix: [`docs/language-capability-matrix.md`](docs/language-capability-matrix.md).
 
 ---
 
-## Measured results
+## Demonstrated today
 
-NestJS + Next.js SaaS, 1,268 files, ~860K words. Same question, same Claude Opus 4.7, captured from `claude --output-format json`. Receipts: [`docs/benchmarks/2026-04-30-govalidate/`](docs/benchmarks/2026-04-30-govalidate/).
+- **Local, deterministic, task-aware first-pass context.** `madar generate`, `madar pack`, and the MCP graph tools build compact, reviewable evidence bundles from local graph artifacts.
+- **Static runtime-path modeling for runtime questions.** `execution_slice` and `phase_coverage` are explicit static hypotheses from graph evidence, not live traces.
+- **Runtime-generation prompts stay compact.** The current pack shaping follows the strongest backend path first and suppresses sibling-route noise plus shared-hub fan-out on broad runtime-generation questions.
+- **Share-safe proof artifacts.** `report.share-safe.json`, Pack Schema v1, and the dated benchmark folders make it possible to inspect what happened without leaking private paths.
+- **Mixed-but-real benchmark receipts.** The public benchmark folders show what happened on specific repos and prompts, including both wins and regressions. Start with [`docs/claims-and-evidence.md`](docs/claims-and-evidence.md) for the current claim map.
 
-|                        | Without madar | With madar | Difference |
-|------------------------|---------------------|------------------|------------|
-| **Tool-call turns**    | 9                   | **3**            | **3× fewer** |
-| **Latency**            | 96 sec              | **35 sec**       | **2.8× faster** |
-| **Input tokens** (provider-reported) | 615,190 | **233,508**      | **2.6× fewer** |
+## In progress
 
-PR-review proof on a real diff: prompt tokens 63,024 → **8,690** (**7.25× fewer**). Receipts: [`docs/benchmarks/2026-05-02-govalidate-pr-review/`](docs/benchmarks/2026-05-02-govalidate-pr-review/).
+- **Reproducible benchmark suite with per-repo spread.** The public suite now ships fixed manifests, methodology, and the `madar bench:suite` runner under [`docs/benchmarks/suite/`](docs/benchmarks/suite/).
+- **Exploration reduction as a product outcome.** Strict install guidance now pushes agents toward one graph/pack-first pass, but the public evidence is still mixed. The current counterexample note is in [`docs/benchmarks/2026-05-25-founder-command-center-auth-flow/`](docs/benchmarks/2026-05-25-founder-command-center-auth-flow/).
+- **Clearer compare evidence.** Native-agent compare traces now preserve more machine-readable metadata, but we still treat them as repo/task-specific receipts rather than a universal claim.
 
-`--spi` benchmark (bundled fixture, 7 prompts): **better framework-shaped correctness**, **operational retrieval-level expansion**, **graph.json size −32%**, **cache-hit rebuild −27% vs legacy**, but **no measured explain-pack token win on that fixture**. Receipts: [`docs/benchmarks/2026-05-11-spi-vs-legacy/`](docs/benchmarks/2026-05-11-spi-vs-legacy/).
+## Not yet measured
 
-Latest runtime-pack refinement: **runtime-generation prompts stay compact** by following the strongest backend runtime path and suppressing sibling routes, script/migration noise, and shared-hub fan-out on broad backend-generation questions.
+- **Fewer wrong-file edits.** Madar surfaces likely edit files, likely test files, and risk boundaries, but the effect on edit correctness is not measured yet.
+- **A single latency or exploration headline that holds across repos.** Current public artifacts do not justify a universal turns / latency / exploration claim.
+- **Cross-repo aggregate benchmark marketing.** We do not publish a single-number cross-repo headline.
 
-Single-prompt backend benchmark snapshot: in one real GoValidate `compare --baseline-mode native_agent` run for `"Explain how idea report is getting generated"`, madar reduced Anthropic-reported input tokens from **1,653,307** to **498,280** (~**69.9%** lower). Multi-question native-agent compare runs now also roll up suite wins/losses for input tokens, turns, and latency, report mean/median input-token reduction, call out comparable-question counts when some runs are excluded from the aggregate, and highlight the best win and worst regression prompt. Details and caveats: [`docs/benchmarks/2026-05-12-govalidate-report-generation/`](docs/benchmarks/2026-05-12-govalidate-report-generation/).
+## What Madar does not do today
 
-[Reproduce them](docs/benchmarks/2026-04-30-govalidate/verify.sh) with one shell script against the committed evidence files.
+- It does **not** control the agent runtime. The agent can still ignore the pack and keep exploring.
+- It does **not** guarantee fewer tool calls, fewer turns, or lower latency on every repo or prompt.
+- It does **not** turn static analysis into live instrumentation. `execution_slice` stays a static runtime-path hypothesis, not a trace.
+- It does **not** replace targeted reads, tests, or review when you are changing code.
+
+## How we measure
+
+- We publish dated artifact folders under [`docs/benchmarks/`](docs/benchmarks/) and map each public claim to evidence in [`docs/claims-and-evidence.md`](docs/claims-and-evidence.md).
+- We separate **cold-cache** and **warm-cache** observations, and we call out mixed evidence when a repo or prompt regresses.
+- Published benchmark cells run in isolation mode ([`docs/benchmarks/suite/isolation/`](docs/benchmarks/suite/isolation/)). Your local numbers may differ if your Claude Code config differs.
+- The benchmark-suite direction is **per-repo spread**, fixed tasks, and reproducible artifacts under [`docs/benchmarks/suite/`](docs/benchmarks/suite/). Run `madar bench:suite --dry-run` to inspect the current matrix, then `madar bench:suite --repo nestjs-mid --task explain-runtime ...` to populate a wired cell. There is **no single-number cross-repo headline** in the public docs.
+- Any stronger public claim belongs behind a reproducible suite artifact, not a one-off anecdote.
 
 ---
 
@@ -165,11 +204,11 @@ madar produces local context packs that any modern coding agent can consume — 
 
 These are local installers that write project instructions and, when the platform supports it, local MCP config or plugin files that point at the madar subprocess. No code is uploaded.
 
-For Claude, Cursor, Copilot, and Gemini, `--profile strict` keeps the lean core MCP tool surface but rewrites the generated guidance into a compact flow: call `context_pack` once for the task before broader exploration, answer from the pack when coverage is complete, expand only when diagnostics show missing evidence, and avoid raw file search unless the pack is insufficient.
+For Claude, Cursor, Copilot, and Gemini, `--profile strict` keeps the lean core MCP tool surface but rewrites the generated guidance into a compact flow: call `context_pack` once for the task before broader exploration, answer after one high- or medium-confidence pack when `diagnostics.quality_score >= 0.5` and `missing_context` is empty, do not run broad `Glob` patterns, repo-wide `grep` / `find` searches, or raw file sweeps after that strong pack, prefer Madar over non-Madar MCPs for codebase questions unless Madar returns `agent_directive: explore_with_caution`, let that Madar guidance override conflicting auto-activated exploration skills, expand only when `missing_context` / `missing_semantic` or diagnostics justify it (or the user asks for deeper verification), and keep `out/GRAPH_REPORT.md` as a fallback-only read when the pack or graph tools are unavailable, stale, or insufficient. Strict mode is about a bounded first pass, not a guarantee that exploration will always decrease.
 
-Aider and OpenCode are intentionally context-pack-first: run `madar generate .`, install the profile, and start broad codebase work with `madar pack "<task>" --task explain` before raw file search. `madar aider install` writes an AGENTS.md profile only; remove it with `madar aider uninstall`. `madar opencode install` writes the AGENTS.md profile, `.opencode/plugins/madar.js`, and the madar MCP entry in `opencode.json` or `opencode.jsonc`; remove only madar-owned content with `madar opencode uninstall`. Manual verification does not require either agent binary: inspect the generated files after install, then confirm uninstall removes only the madar entries.
+Aider and OpenCode are intentionally context-pack-first: run `madar generate .`, install the profile, and start broad codebase work with `madar pack "<task>" --task explain` before raw file search. In those installed profiles, `out/GRAPH_REPORT.md` stays a fallback-only read when the pack or graph tools are unavailable, stale, or insufficient, rather than a default first file. `madar aider install` writes an AGENTS.md profile only; remove it with `madar aider uninstall`. `madar opencode install` writes the AGENTS.md profile, `.opencode/plugins/madar.js`, and the madar MCP entry in `opencode.json` or `opencode.jsonc`; remove only madar-owned content with `madar opencode uninstall`. Manual verification does not require either agent binary: inspect the generated files after install, then confirm uninstall removes only the madar entries.
 
-Codex is intentionally context-pack-first: run `madar generate .`, install with `madar codex install`, and start broad codebase work with `madar pack "<task>" --task explain` before raw file search. To remove the profile, run `madar codex uninstall`; it removes the madar AGENTS.md section and Codex hook while preserving unrelated content. Manual verification does not require Codex to be installed: inspect `AGENTS.md` and `.codex/hooks.json` after install, then confirm uninstall removes only madar content.
+Codex is intentionally context-pack-first: run `madar generate .`, install with `madar codex install`, and start broad codebase work with `madar pack "<task>" --task explain` before raw file search. In the installed guidance, `out/GRAPH_REPORT.md` remains fallback-only when the pack or graph tools are unavailable, stale, or insufficient. To remove the profile, run `madar codex uninstall`; it removes the madar AGENTS.md section and Codex hook while preserving unrelated content. Manual verification does not require Codex to be installed: inspect `AGENTS.md` and `.codex/hooks.json` after install, then confirm uninstall removes only madar content.
 
 For practical multi-agent workflows across Claude Code, Codex, Copilot, Cursor, and Gemini, see the [agent orchestration guide](docs/integrations/agent-orchestration.md).
 
@@ -204,7 +243,8 @@ madar generate .                          # build the graph
 madar generate . --spi                    # opt-in SPI pipeline (framework metadata + disk cache)
 madar watch .                             # rebuild on file change
 madar summary                             # bounded JSON overview before deeper retrieval
-madar pack "how does auth work?" --task explain          # compact CLI context payload
+madar pack "how does auth work?" --task explain --format text   # human-readable execution brief
+madar pack "add auth telemetry" --task implement --format json  # Pack Schema v1 for automation
 madar pack "why does auth fail?" --task explain --retrieval-strategy slice-v1
 madar prompt "how does auth work?" --provider claude     # provider-ready compiled prompt
 madar review-compare out/graph.json --exec '...' --yes  # PR review benchmark
@@ -248,6 +288,8 @@ Everything stays local by default. No telemetry, no cloud upload, no API key req
 ## Documentation & receipts
 
 - [Quick start guide](docs/proof-workflows.md) — three reproducible workflows: local proof, A/B compare, federated proof
+- [Claims and evidence map](docs/claims-and-evidence.md) — which public claims are demonstrated, in progress, or not yet measured
+- [Benchmark suite](docs/benchmarks/suite/README.md) — fixed manifests, methodology, CLI runner, and per-repo spread results
 - [GoValidate shared benchmark suite](docs/benchmarks/govalidate-suite/README.md) — public prompt set plus deterministic pack/answer quality gates
 - [Public roadmap](docs/roadmap.md) — contributor-facing priority tracks and issue links
 - [Language and capability matrix](docs/language-capability-matrix.md) — exactly what each file type and language gets

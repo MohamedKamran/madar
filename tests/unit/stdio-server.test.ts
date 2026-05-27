@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { PassThrough } from 'node:stream'
 import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -815,6 +815,115 @@ describe('stdio runtime', () => {
       expect(impactDefaultPayload.direct_dependents[0]).not.toHaveProperty('framework_role')
       expect(impactDefaultPayload.direct_dependents[0]).not.toHaveProperty('community_label')
       expect(impactDefaultPayload.missing_context).toEqual(expect.any(Array))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('adds an evidence block to Madar MCP responses that guide agent exploration', async () => {
+    const root = createGraphFixtureRoot()
+    try {
+      const graphPath = join(root, 'graph.json')
+      const calls = {
+        context_pack: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 100,
+          method: 'tools/call',
+          params: {
+            name: 'context_pack',
+            arguments: {
+              prompt: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        retrieve: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 101,
+          method: 'tools/call',
+          params: {
+            name: 'retrieve',
+            arguments: {
+              question: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        relevant_files: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 102,
+          method: 'tools/call',
+          params: {
+            name: 'relevant_files',
+            arguments: {
+              question: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        feature_map: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 103,
+          method: 'tools/call',
+          params: {
+            name: 'feature_map',
+            arguments: {
+              question: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        risk_map: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 104,
+          method: 'tools/call',
+          params: {
+            name: 'risk_map',
+            arguments: {
+              question: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        implementation_checklist: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 105,
+          method: 'tools/call',
+          params: {
+            name: 'implementation_checklist',
+            arguments: {
+              question: 'How does auth reach transport?',
+              budget: 1200,
+            },
+          },
+        })),
+        graph_summary: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 106,
+          method: 'tools/call',
+          params: {
+            name: 'graph_summary',
+            arguments: {},
+          },
+        })),
+        impact: await Promise.resolve(handleStdioRequest(graphPath, {
+          id: 107,
+          method: 'tools/call',
+          params: {
+            name: 'impact',
+            arguments: {
+              label: 'AuthService',
+              depth: 3,
+            },
+          },
+        })),
+      } as const
+
+      for (const response of Object.values(calls)) {
+        const payload = JSON.parse((response?.result as { content: Array<{ text: string }> }).content[0]!.text) as {
+          evidence?: Record<string, unknown>
+        }
+        expect(payload.evidence).toEqual(expect.objectContaining({
+          pack_confidence: expect.stringMatching(/^(high|medium|low)$/),
+          coverage: expect.stringMatching(/^(complete|partial|unknown)$/),
+          agent_directive: expect.stringMatching(/^(answer_from_pack|verify_one_targeted_file|explore_with_caution)$/),
+          missing_phases: expect.any(Array),
+          covered_workflow_owners: expect.any(Array),
+        }))
+      }
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2032,6 +2141,69 @@ describe('stdio runtime', () => {
       expect(versionAfter).toMatch(/^[a-f0-9]{12}$/)
       expect(versionAfter).not.toBe(versionBefore)
     } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reloads the cached graph when graph.json size changes without an mtime change', async () => {
+    const root = createGraphFixtureRoot()
+    const graphPath = join(root, 'graph.json')
+    const originalGraphStat = statSync(graphPath)
+    let freezeGraphMtime = false
+
+    try {
+      vi.resetModules()
+      vi.doMock('node:fs', async () => {
+        const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+        return {
+          ...actual,
+          statSync(path: Parameters<typeof actual.statSync>[0], options?: Parameters<typeof actual.statSync>[1]) {
+            const stat = actual.statSync(path, options as never)
+            if (freezeGraphMtime && path === graphPath) {
+              return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+                mtimeMs: originalGraphStat.mtimeMs,
+                mtime: originalGraphStat.mtime,
+              })
+            }
+            return stat
+          },
+        }
+      })
+
+      const { handleStdioRequest: isolatedHandleStdioRequest } = await import('../../src/runtime/stdio-server.js')
+
+      const before = isolatedHandleStdioRequest(graphPath, { id: 1, method: 'stats' })
+      const freshnessBefore = isolatedHandleStdioRequest(graphPath, { id: 11, method: 'resources/list' })
+
+      writeFileSync(
+        graphPath,
+        JSON.stringify({
+          nodes: [{ id: 'replacement', label: 'ReplacementNode', source_file: 'replacement.ts', source_location: '1', file_type: 'code', community: 0 }],
+          edges: [],
+          hyperedges: [],
+        }),
+        'utf8',
+      )
+      freezeGraphMtime = true
+
+      const after = isolatedHandleStdioRequest(graphPath, { id: 2, method: 'node', params: { label: 'ReplacementNode' } })
+      const freshnessAfter = isolatedHandleStdioRequest(graphPath, { id: 12, method: 'resources/list' })
+
+      const versionBefore = (freshnessBefore as { result: { resources: Array<{ uri: string; annotations?: Record<string, unknown> }> } }).result.resources.find(
+        (resource) => resource.uri === 'madar://artifact/graph.json',
+      )?.annotations?.graph_version
+      const versionAfter = (freshnessAfter as { result: { resources: Array<{ uri: string; annotations?: Record<string, unknown> }> } }).result.resources.find(
+        (resource) => resource.uri === 'madar://artifact/graph.json',
+      )?.annotations?.graph_version
+
+      expect((before as { result: string }).result).toContain('Nodes: 3')
+      expect((after as { result: string }).result).toContain('Node: ReplacementNode')
+      expect(versionBefore).toMatch(/^[a-f0-9]{12}$/)
+      expect(versionAfter).toMatch(/^[a-f0-9]{12}$/)
+      expect(versionAfter).not.toBe(versionBefore)
+    } finally {
+      vi.doUnmock('node:fs')
+      vi.resetModules()
       rmSync(root, { recursive: true, force: true })
     }
   })

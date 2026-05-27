@@ -454,7 +454,45 @@ describe('retrieveContext production retrieval regressions', () => {
     ]))
   })
 
-  it('surfaces richer report-generation phases when graph evidence covers planner, research, assembly, scoring, and rendering', () => {
+  it('keeps low-confidence report-generation slices honest when no runtime handoff was traced', () => {
+    const compact = compactRetrieveResult(retrieveContext(buildBroadReportGenerationGraph(), {
+      question: 'How idea report is being generated',
+      budget: 4000,
+      retrievalLevel: 4,
+      retrievalStrategy: 'slice-v1',
+    }))
+
+    expect(compact.execution_slice?.confidence).toBe('low')
+    expect(compact.execution_slice?.confidence_reasons).toEqual(expect.arrayContaining([
+      'no_runtime_handoff',
+    ]))
+    expect(compact.execution_slice?.status).toBe('partial')
+    expect(compact.execution_slice?.phase_coverage).toEqual(expect.objectContaining({
+      missing: expect.arrayContaining([
+        'external_research_or_api',
+        'report_builder',
+        'scoring',
+        'quality_gate',
+        'renderer_or_synthesis',
+        'persistence',
+      ]),
+    }))
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('external_research_or_api')
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('report_builder')
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('scoring')
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('quality_gate')
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('renderer_or_synthesis')
+    expect(compact.execution_slice?.phase_coverage?.observed).not.toContain('persistence')
+    expect(compact.answer_contract).toEqual(expect.objectContaining({
+      observed_phases: compact.execution_slice?.phase_coverage?.observed,
+      missing_phases: compact.execution_slice?.phase_coverage?.missing,
+      do_not_claim: expect.arrayContaining([
+        'full_runtime_certainty_when_slice_is_partial',
+      ]),
+    }))
+  })
+
+  it('retains richer report-generation expectations without overclaiming untraced phases', () => {
     const compact = compactRetrieveResult(retrieveContext(buildBroadReportGenerationGraph(), {
       question: 'How idea report is being generated',
       budget: 4000,
@@ -473,6 +511,11 @@ describe('retrieveContext production retrieval regressions', () => {
         'persistence',
       ],
       observed: expect.arrayContaining([
+        'controller',
+        'service',
+        'queue',
+      ]),
+      missing: expect.arrayContaining([
         'planner',
         'external_research_or_api',
         'report_builder',
@@ -481,7 +524,6 @@ describe('retrieveContext production retrieval regressions', () => {
         'renderer_or_synthesis',
         'persistence',
       ]),
-      missing: [],
     }))
   })
 })

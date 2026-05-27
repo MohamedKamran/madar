@@ -1,22 +1,28 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
 import {
   executeNativeAgentCompare,
   formatNativeAgentCompareSummary,
+  inspectClaudeNativeAgentInstall,
   parseAnthropicResultEvent,
   type CompareRunMode,
   type NativeAgentCompareResult,
   type NativeAgentCompareReport,
   type NativeAgentRunner,
 } from '../../src/infrastructure/compare.js'
+import { claudeInstall } from '../../src/infrastructure/install.js'
 
 const FIXTURE_PARENT = resolve('out', 'test-runtime', 'native-agent')
 const COMPARE_OUTPUT_PARENT = resolve('out', 'compare', 'test-runtime-native-agent')
 
-function makeFixtureProject(): { projectDir: string; graphPath: string; outputDir: string } {
+function writeClaudeInstallArtifacts(projectDir: string): void {
+  claudeInstall(projectDir)
+}
+
+function makeFixtureProject(options: { installState?: 'managed' | 'valid' | 'missing' } = {}): { projectDir: string; graphPath: string; outputDir: string } {
   mkdirSync(FIXTURE_PARENT, { recursive: true })
   mkdirSync(COMPARE_OUTPUT_PARENT, { recursive: true })
   const projectDir = mkdtempSync(join(FIXTURE_PARENT, 'project-'))
@@ -35,12 +41,13 @@ function makeFixtureProject(): { projectDir: string; graphPath: string; outputDi
     }),
     'utf8',
   )
-  // Plant the other snapshot targets so we can verify they round-trip.
-  writeFileSync(join(projectDir, '.mcp.json'), JSON.stringify({ mcpServers: { 'madar': {} } }, null, 2), 'utf8')
-  writeFileSync(join(projectDir, 'CLAUDE.md'), '# Project Claude rules\n', 'utf8')
-  mkdirSync(join(projectDir, '.claude'), { recursive: true })
-  writeFileSync(join(projectDir, '.claude', 'settings.json'), '{}\n', 'utf8')
-  return { projectDir, graphPath: join(projectDir, 'out', 'graph.json'), outputDir }
+  const graphPath = join(projectDir, 'out', 'graph.json')
+  if (options.installState === 'managed') {
+    claudeInstall(projectDir)
+  } else if (options.installState !== 'missing') {
+    writeClaudeInstallArtifacts(projectDir)
+  }
+  return { projectDir, graphPath, outputDir }
 }
 
 const BASELINE_USAGE_PAYLOAD = {
@@ -75,6 +82,177 @@ const MADAR_USAGE_PAYLOAD = {
   },
 }
 
+const BASELINE_TOKEN_REGRESSION_PAYLOAD = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  duration_ms: 42000,
+  num_turns: 5,
+  result: 'baseline answer',
+  total_cost_usd: 0.62,
+  usage: {
+    input_tokens: 21144,
+    cache_creation_input_tokens: 43534,
+    cache_read_input_tokens: 324040,
+    output_tokens: 1200,
+  },
+}
+
+const MADAR_TOKEN_REGRESSION_PAYLOAD = {
+  type: 'result',
+  subtype: 'success',
+  is_error: false,
+  duration_ms: 39000,
+  num_turns: 4,
+  result: 'madar answer',
+  total_cost_usd: 0.71,
+  usage: {
+    input_tokens: 18023,
+    cache_creation_input_tokens: 72305,
+    cache_read_input_tokens: 277531,
+    output_tokens: 1000,
+  },
+}
+
+const VERBOSE_BASELINE_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Read' },
+        { type: 'tool_use', name: 'Grep' },
+      ],
+    },
+  },
+  {
+    type: 'assistant',
+    turn: 2,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Read' },
+      ],
+    },
+  },
+  BASELINE_USAGE_PAYLOAD,
+] as const
+
+const VERBOSE_MADAR_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'context_pack' },
+        { type: 'tool_use', name: 'Read' },
+      ],
+    },
+  },
+  {
+    type: 'assistant',
+    turn: 2,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Glob' },
+        { type: 'tool_use', name: 'Bash' },
+      ],
+    },
+  },
+  MADAR_USAGE_PAYLOAD,
+] as const
+
+const CONTAMINATED_VERBOSE_MADAR_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'text', text: '<command-name>superpowers:using-superpowers</command-name>' },
+        { type: 'text', text: 'Skill tool invoked: {"skill":"superpowers:systematic-debugging"}' },
+        { type: 'tool_use', name: 'mcp__madar__context_pack' },
+      ],
+    },
+  },
+  {
+    type: 'assistant',
+    turn: 2,
+    message: {
+      content: [
+        { type: 'text', text: '<command-name>everything-claude-code:documentation-lookup</command-name>' },
+        { type: 'text', text: 'spawn_agent worker launched' },
+        { type: 'tool_use', name: 'mcp__github__search_code' },
+        { type: 'tool_use', name: 'mcp__context7__get-library-docs' },
+      ],
+    },
+  },
+  MADAR_USAGE_PAYLOAD,
+] as const
+
+const VERBOSE_MADAR_NO_INSTALL_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Read' },
+        { type: 'tool_use', name: 'Grep' },
+      ],
+    },
+  },
+  MADAR_USAGE_PAYLOAD,
+] as const
+
+const VERBOSE_MADAR_MCP_RETRIEVE_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'mcp__madar__retrieve' },
+      ],
+    },
+  },
+  MADAR_USAGE_PAYLOAD,
+] as const
+
+const VERBOSE_MADAR_MCP_RETRIEVE_WITH_FOLLOWUP_EXPLORATION_PAYLOAD = [
+  { type: 'system', subtype: 'init' },
+  {
+    type: 'assistant',
+    turn: 1,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'ToolSearch' },
+      ],
+    },
+  },
+  {
+    type: 'assistant',
+    turn: 2,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'mcp__madar__retrieve' },
+      ],
+    },
+  },
+  {
+    type: 'assistant',
+    turn: 3,
+    message: {
+      content: [
+        { type: 'tool_use', name: 'Glob' },
+        { type: 'tool_use', name: 'Read' },
+      ],
+    },
+  },
+  MADAR_USAGE_PAYLOAD,
+] as const
+
 function scriptedRunner(payloads: { baseline: unknown; madar: unknown }): NativeAgentRunner {
   return async (input) => ({
     exitCode: 0,
@@ -93,7 +271,15 @@ function buildSummaryResult(overrides: {
   baselineInputTokens: number
   madarInputTokens: number
   reductions: NonNullable<NativeAgentCompareReport['reductions']>
+  madarTrace?: NativeAgentCompareReport['madar_trace']
+  toolCallCounts?: NativeAgentCompareReport['tool_call_counts']
+  installVerified?: boolean
+  measurementValidity?: 'valid' | 'degraded' | 'invalid'
+  madarMcpCallCount?: number
 }): NativeAgentCompareResult {
+  const installVerified = overrides.installVerified ?? true
+  const madarMcpCallCount = overrides.madarMcpCallCount ?? overrides.madarTrace?.madar_mcp_call_count ?? 0
+  const measurementValidity = overrides.measurementValidity ?? (installVerified ? (madarMcpCallCount > 0 ? 'valid' : 'degraded') : 'invalid')
   return {
     graph_path: '/tmp/project/out/graph.json',
     output_root: '/tmp/project/out/compare/2026-05-12T00-00-00Z',
@@ -102,6 +288,32 @@ function buildSummaryResult(overrides: {
         baseline_mode: 'native_agent',
         question: overrides.question,
         graph_path: '/tmp/project/out/graph.json',
+        isolation: false,
+        environment: {
+          claude_code_version: '1.2.3',
+          host_os: 'darwin-arm64',
+          node_version: 'v22.0.0',
+          mcp_servers_active: ['madar'],
+          mcp_server_count: 1,
+          skills_loaded: [],
+          skills_loaded_count: 0,
+          plugins_active: [],
+          user_claude_md_hash: 'sha256:isolation',
+          project_claude_md_hash: null,
+          parent_claude_md_hashes: [],
+          hooks_active: {
+            user_prompt_submit: [],
+            pre_tool_use: [],
+            post_tool_use: [],
+          },
+        },
+        environment_contamination: {
+          skills_activated_during_run: [],
+          skills_conflicting_with_madar_rules: [],
+          calls_to_other_mcps: {},
+          subagent_dispatches_detected: 0,
+          skill_alignment_score: 1,
+        },
         exec_command: { command: null, redacted: true, placeholders: [] },
         baseline: {
           kind: 'succeeded',
@@ -138,6 +350,8 @@ function buildSummaryResult(overrides: {
           result_path: '/tmp/project/madar.txt',
         },
         reductions: overrides.reductions,
+        token_regression: false,
+        token_regression_reasons: [],
         prompt_token_source: {
           baseline: 'anthropic_provider_reported',
           madar: 'anthropic_provider_reported',
@@ -157,6 +371,11 @@ function buildSummaryResult(overrides: {
           },
           reduction_basis: 'provider_reported',
         },
+        install_verified: installVerified,
+        measurement_validity: measurementValidity,
+        madar_mcp_call_count: madarMcpCallCount,
+        ...(overrides.toolCallCounts ? { tool_call_counts: overrides.toolCallCounts } : {}),
+        ...(overrides.madarTrace ? { madar_trace: overrides.madarTrace } : {}),
         started_at: '2026-05-12T00:00:00.000Z',
         completed_at: '2026-05-12T00:00:01.000Z',
         paths: {
@@ -200,6 +419,13 @@ describe('parseAnthropicResultEvent', () => {
     expect(parsed?.num_turns).toBe(3)
   })
 
+  it('extracts the trailing result event from a verbose JSON array', () => {
+    const parsed = parseAnthropicResultEvent(JSON.stringify(VERBOSE_MADAR_PAYLOAD))
+    expect(parsed).not.toBeNull()
+    expect(parsed?.usage.input_tokens).toBe(13)
+    expect(parsed?.num_turns).toBe(3)
+  })
+
   it('returns null when stdout has no parseable trailing JSON object', () => {
     expect(parseAnthropicResultEvent('not a json blob at all')).toBeNull()
   })
@@ -210,6 +436,247 @@ describe('parseAnthropicResultEvent', () => {
 })
 
 describe('executeNativeAgentCompare', () => {
+  it('aborts when no Madar install is detected and --allow-no-install is not set', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject({ installState: 'missing' })
+    try {
+      await expect(
+        executeNativeAgentCompare(
+          {
+            graphPath,
+            question: 'What is the cluster module?',
+            outputDir,
+            execTemplate: 'mock-runner',
+            baselineMode: 'native_agent',
+          },
+          {
+            runner: scriptedRunner({ baseline: BASELINE_USAGE_PAYLOAD, madar: MADAR_USAGE_PAYLOAD }),
+            now: () => new Date('2026-05-01T00:00:00Z'),
+          },
+        ),
+      ).rejects.toThrow(/No Madar install detected/)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks runs invalid when install is missing but --allow-no-install is set', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject({ installState: 'missing' })
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+          allowNoInstall: true,
+        },
+        {
+          runner: scriptedRunner({ baseline: BASELINE_USAGE_PAYLOAD, madar: MADAR_USAGE_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+      const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
+
+      expect(report.install_verified).toBe(false)
+      expect(report.measurement_validity).toBe('invalid')
+      expect(report.madar_mcp_call_count).toBe(0)
+      expect(savedReport.install_verified).toBe(false)
+      expect(savedReport.measurement_validity).toBe('invalid')
+      expect(shareSafeReport.install_verified).toBe(false)
+      expect(shareSafeReport.measurement_validity).toBe('invalid')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks runs degraded when install is verified but the agent never invokes Madar', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: VERBOSE_MADAR_NO_INSTALL_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.install_verified).toBe(true)
+      expect(report.measurement_validity).toBe('degraded')
+      expect(report.madar_mcp_call_count).toBe(0)
+      expect(report.madar_trace).toEqual(expect.objectContaining({
+        madar_mcp_call_count: 0,
+        exploration_outcome: 'madar_available_but_unused',
+      }))
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks verbose missing-install runs as no_install when trace data is present', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject({ installState: 'missing' })
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+          allowNoInstall: true,
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: VERBOSE_MADAR_NO_INSTALL_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.install_verified).toBe(false)
+      expect(report.measurement_validity).toBe('invalid')
+      expect(report.madar_trace).toEqual(expect.objectContaining({
+        madar_mcp_call_count: 0,
+        exploration_outcome: 'no_install',
+      }))
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('marks runs valid when install is verified and Madar MCP is invoked', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: VERBOSE_MADAR_MCP_RETRIEVE_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.install_verified).toBe(true)
+      expect(report.measurement_validity).toBe('valid')
+      expect(report.madar_mcp_call_count).toBe(1)
+      expect(report.madar_trace).toEqual(expect.objectContaining({
+        madar_mcp_call_count: 1,
+        madar_mcp_calls_by_name: {
+          'mcp__madar__retrieve': 1,
+        },
+        exploration_outcome: 'madar_invoked',
+      }))
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('recognizes the real Claude installer hook as a verified Madar install', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject({ installState: 'managed' })
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: VERBOSE_MADAR_MCP_RETRIEVE_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.install_verified).toBe(true)
+      expect(report.measurement_validity).toBe('valid')
+      expect(report.madar_mcp_call_count).toBe(1)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not treat a non-Claude managed hook matcher as a verified Claude install', () => {
+    const { projectDir } = makeFixtureProject({ installState: 'managed' })
+    try {
+      writeFileSync(
+        join(projectDir, '.claude', 'settings.json'),
+        JSON.stringify(
+          {
+            hooks: {
+              PreToolUse: [
+                {
+                  name: 'madar',
+                  source: 'madar',
+                  matcher: 'read_file|list_directory|search_for_pattern',
+                  hooks: [
+                    {
+                      type: 'command',
+                      command: 'echo ignored',
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      )
+
+      expect(inspectClaudeNativeAgentInstall(projectDir).verified).toBe(false)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('classifies broad exploration after a Madar MCP call as madar_invoked_with_followup_exploration', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({
+            baseline: VERBOSE_BASELINE_PAYLOAD,
+            madar: VERBOSE_MADAR_MCP_RETRIEVE_WITH_FOLLOWUP_EXPLORATION_PAYLOAD,
+          }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.madar_trace).toEqual(expect.objectContaining({
+        madar_mcp_call_count: 1,
+        exploration_outcome: 'madar_invoked_with_followup_exploration',
+      }))
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
   it('produces a report with both Anthropic-reported usage blocks and computed reductions', async () => {
     const { projectDir, graphPath, outputDir } = makeFixtureProject()
     try {
@@ -275,6 +742,47 @@ describe('executeNativeAgentCompare', () => {
       // a usage block was present in the runner output.
       expect(report.prompt_token_source.baseline).toBe('anthropic_provider_reported')
       expect(report.prompt_token_source.madar).toBe('anthropic_provider_reported')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('flags token regressions when fresh-token usage rises despite near-flat total input tokens', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'How idea report is being generated',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({
+            baseline: BASELINE_TOKEN_REGRESSION_PAYLOAD,
+            madar: MADAR_TOKEN_REGRESSION_PAYLOAD,
+          }),
+          now: () => new Date('2026-05-26T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+      const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
+      const reductions = savedReport.reductions as Record<string, unknown>
+      const shareSafeReductions = shareSafeReport.reductions as Record<string, unknown>
+
+      expect(reductions.input_tokens).toBeCloseTo(1.06, 2)
+      expect(reductions.uncached_input_tokens).toBeCloseTo(0.72, 2)
+      expect(reductions.cache_creation_input_tokens).toBeCloseTo(0.6, 2)
+      expect(savedReport.token_regression).toBe(true)
+      expect(savedReport.token_regression_reasons).toEqual(expect.arrayContaining([
+        'uncached_input_tokens',
+        'cache_creation_input_tokens',
+      ]))
+      expect(shareSafeReductions.uncached_input_tokens).toBeCloseTo(0.72, 2)
+      expect(shareSafeReport.token_regression).toBe(true)
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }
@@ -356,6 +864,7 @@ describe('executeNativeAgentCompare', () => {
           outputDir,
           execTemplate: 'mock-runner',
           baselineMode: 'native_agent',
+          allowNoInstall: true,
         },
         {
           runner: scriptedRunner({ baseline: BASELINE_USAGE_PAYLOAD, madar: MADAR_USAGE_PAYLOAD }),
@@ -472,6 +981,181 @@ describe('executeNativeAgentCompare', () => {
       expect(report.madar.kind).toBe('answer_only')
       expect(report.reductions).toBeNull()
     } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves reductions, provider proof, and tool-call counts for verbose JSON-array runs', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'verbose trace',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: VERBOSE_MADAR_PAYLOAD }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.baseline.kind).toBe('succeeded')
+      expect(report.madar.kind).toBe('succeeded')
+      expect(report.reductions).not.toBeNull()
+      expect(report.provider_proof?.reduction_basis).toBe('provider_reported')
+      expect(report.tool_call_counts).toEqual({
+        baseline: {
+          total: 3,
+          Read: 2,
+          Bash: 0,
+          Glob: 0,
+          Grep: 1,
+          ToolSearch: 0,
+          other: {},
+        },
+        madar: {
+          total: 4,
+          Read: 1,
+          Bash: 1,
+          Glob: 1,
+          Grep: 0,
+          ToolSearch: 0,
+          other: {
+            context_pack: 1,
+          },
+        },
+      })
+
+      const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as {
+        tool_call_counts?: NativeAgentCompareReport['tool_call_counts']
+      }
+      const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as {
+        tool_call_counts?: NativeAgentCompareReport['tool_call_counts']
+      }
+      expect(savedReport.tool_call_counts).toEqual(report.tool_call_counts)
+      expect(shareSafeReport.tool_call_counts).toEqual(report.tool_call_counts)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('writes environment and contamination blocks to report.json and report.share-safe.json', async () => {
+    const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousIsolation = process.env.MADAR_BENCH_ISOLATION
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    const claudeConfigDir = mkdtempSync(join(FIXTURE_PARENT, 'claude-config-'))
+    const homeDir = dirname(claudeConfigDir)
+    try {
+      mkdirSync(join(claudeConfigDir, 'skills', 'brainstorming'), { recursive: true })
+      mkdirSync(join(homeDir, '.agents', 'skills', 'systematic-debugging'), { recursive: true })
+      mkdirSync(join(projectDir, '.opencode', 'plugins'), { recursive: true })
+      writeFileSync(join(claudeConfigDir, 'CLAUDE.md'), '# user claude\n', 'utf8')
+      writeFileSync(
+        join(claudeConfigDir, 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            UserPromptSubmit: [
+              { hooks: [{ type: 'command', command: 'echo submit' }], matcher: 'prompt' },
+            ],
+          },
+        }, null, 2),
+        'utf8',
+      )
+      writeFileSync(join(projectDir, '.opencode', 'plugins', 'context7.ts'), 'export {}\n', 'utf8')
+      mkdirSync(join(projectDir, '.vscode'), { recursive: true })
+      writeFileSync(
+        join(projectDir, '.claude', 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            PreToolUse: [
+              { matcher: 'Glob|Grep|Bash|Agent|Read', hooks: [{ type: 'command', command: 'echo project-pre' }] },
+            ],
+          },
+        }, null, 2),
+        'utf8',
+      )
+      writeFileSync(
+        join(projectDir, '.vscode', 'mcp.json'),
+        JSON.stringify({
+          servers: {
+            github: {},
+          },
+        }, null, 2),
+        'utf8',
+      )
+
+      process.env.CLAUDE_CONFIG_DIR = claudeConfigDir
+      process.env.MADAR_BENCH_ISOLATION = '0'
+
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'environment capture',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+          allowNoInstall: true,
+        },
+        {
+          runner: scriptedRunner({ baseline: VERBOSE_BASELINE_PAYLOAD, madar: CONTAMINATED_VERBOSE_MADAR_PAYLOAD }),
+          now: () => new Date('2026-05-27T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+      const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
+
+      expect(savedReport).toEqual(expect.objectContaining({
+        isolation: false,
+        environment: expect.objectContaining({
+          mcp_servers_active: expect.arrayContaining(['github', 'madar']),
+          skills_loaded_count: 2,
+          plugins_active: ['context7'],
+          hooks_active: expect.objectContaining({
+            user_prompt_submit: ['user:command:prompt'],
+            pre_tool_use: ['project:command:Glob|Grep|Bash|Agent|Read'],
+          }),
+        }),
+        environment_contamination: {
+          skills_activated_during_run: [
+            'everything-claude-code:documentation-lookup',
+            'superpowers:systematic-debugging',
+            'superpowers:using-superpowers',
+          ],
+          skills_conflicting_with_madar_rules: [
+            'everything-claude-code:documentation-lookup',
+            'superpowers:systematic-debugging',
+          ],
+          calls_to_other_mcps: {
+            'mcp__context7__get-library-docs': 1,
+            'mcp__github__search_code': 1,
+          },
+          subagent_dispatches_detected: 1,
+          skill_alignment_score: 0.33,
+        },
+      }))
+      expect(shareSafeReport).toEqual(expect.objectContaining({
+        isolation: false,
+        environment: savedReport.environment,
+        environment_contamination: savedReport.environment_contamination,
+      }))
+    } finally {
+      if (previousClaudeConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir
+      }
+      if (previousIsolation === undefined) {
+        delete process.env.MADAR_BENCH_ISOLATION
+      } else {
+        process.env.MADAR_BENCH_ISOLATION = previousIsolation
+      }
+      rmSync(claudeConfigDir, { recursive: true, force: true })
       rmSync(projectDir, { recursive: true, force: true })
     }
   })
@@ -715,6 +1399,234 @@ describe('formatNativeAgentCompareSummary', () => {
     expect(summary).toContain('Suite input_tokens (Anthropic-reported): 2 wins · 0 losses · 2/3 comparable · mean reduction 70.8% · median reduction 70.8% · best win: "win b" (75% less) · worst regression: none')
     expect(summary).toContain('Suite num_turns: 2 wins · 0 losses · 2/3 comparable · best win: "win b" (75% fewer) · worst regression: none')
     expect(summary).toContain('Suite latency: 2 wins · 0 losses · 2/3 comparable · best win: "win b" (75% faster) · worst regression: none')
-    expect(summary).toContain('"answer only" → answer-only run saved; no Anthropic usage block was available, so provider-proof reductions were not computed')
+    expect(summary).toContain('- "answer only"')
+    expect(summary).toContain('answer-only run saved; no Anthropic usage block was available, so provider-proof reductions were not computed')
+  })
+
+  it('surfaces whether Madar was invoked cleanly when trace data is present', () => {
+    const summary = formatNativeAgentCompareSummary(buildSummaryResult({
+      question: 'trace case',
+      baselineTurns: 6,
+      madarTurns: 2,
+      baselineDurationMs: 6000,
+      madarDurationMs: 2000,
+      baselineInputTokens: 600,
+      madarInputTokens: 200,
+      reductions: {
+        num_turns: 3,
+        duration_ms: 3,
+        input_tokens: 3,
+        cost_usd: 1,
+      },
+      madarTrace: {
+        source: 'claude_messages_tool_use',
+        summary: '2 tool calls across 2 turns',
+        tool_call_count: 2,
+        tool_calls_by_name: {
+          'mcp__madar__retrieve': 2,
+        },
+        per_turn: [
+          {
+            turn: 1,
+            tool_call_count: 1,
+            tools: ['mcp__madar__retrieve'],
+          },
+          {
+            turn: 2,
+            tool_call_count: 1,
+            tools: ['mcp__madar__retrieve'],
+          },
+        ],
+        madar_mcp_call_count: 2,
+        madar_mcp_calls_by_name: {
+          'mcp__madar__retrieve': 2,
+        },
+        context_pack_call_count: 0,
+        focused_follow_up_tool_call_count: 1,
+        broad_exploration_tool_call_count: 0,
+        broad_exploration_tool_calls_by_name: {},
+        exploration_outcome: 'madar_invoked',
+        exploration_summary: 'Madar MCP invoked 2 times (mcp__madar__retrieve); 1 focused follow-up call; no broad exploration after the first Madar call.',
+      },
+    }))
+
+    expect(summary).toContain('madar_trace: madar_invoked')
+    expect(summary).toContain('Madar MCP invoked 2 times (mcp__madar__retrieve); 1 focused follow-up call; no broad exploration after the first Madar call.')
+    expect(summary).toContain('measurement_validity: valid')
+    expect(summary).toContain('install_verified: true')
+    expect(summary).toContain('madar_mcp_call_count: 2 (mcp__madar__retrieve)')
+  })
+
+  it('prints invalid measurement warnings when install is missing', () => {
+    const summary = formatNativeAgentCompareSummary(buildSummaryResult({
+      question: 'invalid case',
+      baselineTurns: 6,
+      madarTurns: 6,
+      baselineDurationMs: 6000,
+      madarDurationMs: 6000,
+      baselineInputTokens: 600,
+      madarInputTokens: 600,
+      reductions: {
+        num_turns: 1,
+        duration_ms: 1,
+        input_tokens: 1,
+        cost_usd: 1,
+      },
+      installVerified: false,
+      measurementValidity: 'invalid',
+      madarMcpCallCount: 0,
+    }))
+
+    expect(summary).toContain('measurement_validity: INVALID')
+    expect(summary).toContain('install_verified: false')
+    expect(summary).toContain('madar_mcp_call_count: 0')
+  })
+
+  it('prints install validity lines for answer-only runs', () => {
+    const result = buildSummaryResult({
+      question: 'answer-only case',
+      baselineTurns: 6,
+      madarTurns: 6,
+      baselineDurationMs: 6000,
+      madarDurationMs: 6000,
+      baselineInputTokens: 600,
+      madarInputTokens: 600,
+      reductions: {
+        num_turns: 1,
+        duration_ms: 1,
+        input_tokens: 1,
+        cost_usd: 1,
+      },
+      installVerified: false,
+      measurementValidity: 'invalid',
+      madarMcpCallCount: 0,
+    })
+    result.reports[0]!.madar = {
+      kind: 'answer_only',
+      evidence: 'madar answer',
+      exit_code: 0,
+      stderr: null,
+      result_path: '/tmp/project/madar.txt',
+    }
+
+    const summary = formatNativeAgentCompareSummary(result)
+
+    expect(summary).toContain('measurement_validity: INVALID')
+    expect(summary).toContain('install_verified: false')
+    expect(summary).toContain('madar_mcp_call_count: 0')
+    expect(summary).toContain('answer-only run saved')
+  })
+
+  it('prints install validity lines for runner-error runs', () => {
+    const result = buildSummaryResult({
+      question: 'runner-error case',
+      baselineTurns: 6,
+      madarTurns: 6,
+      baselineDurationMs: 6000,
+      madarDurationMs: 6000,
+      baselineInputTokens: 600,
+      madarInputTokens: 600,
+      reductions: {
+        num_turns: 1,
+        duration_ms: 1,
+        input_tokens: 1,
+        cost_usd: 1,
+      },
+      installVerified: true,
+      measurementValidity: 'degraded',
+      madarMcpCallCount: 0,
+    })
+    result.reports[0]!.madar = {
+      kind: 'runner_error',
+      evidence: 'runner failed',
+      exit_code: 1,
+      stderr: 'boom',
+    }
+
+    const summary = formatNativeAgentCompareSummary(result)
+
+    expect(summary).toContain('measurement_validity: degraded')
+    expect(summary).toContain('install_verified: true')
+    expect(summary).toContain('madar_mcp_call_count: 0')
+    expect(summary).toContain('runner error')
+  })
+
+  it('prints the tool-call delta when per-side tool counts are available', () => {
+    const summary = formatNativeAgentCompareSummary(buildSummaryResult({
+      question: 'tool counts',
+      baselineTurns: 6,
+      madarTurns: 3,
+      baselineDurationMs: 6000,
+      madarDurationMs: 3000,
+      baselineInputTokens: 600,
+      madarInputTokens: 300,
+      reductions: {
+        num_turns: 2,
+        duration_ms: 2,
+        input_tokens: 2,
+        cost_usd: 1,
+      },
+      toolCallCounts: {
+        baseline: {
+          total: 6,
+          Read: 3,
+          Bash: 1,
+          Glob: 1,
+          Grep: 1,
+          ToolSearch: 0,
+          other: {},
+        },
+        madar: {
+          total: 4,
+          Read: 2,
+          Bash: 1,
+          Glob: 0,
+          Grep: 0,
+          ToolSearch: 0,
+          other: {
+            context_pack: 1,
+          },
+        },
+      },
+    }))
+
+    expect(summary).toContain('tool calls: baseline 6 → madar 4 (1.5x fewer)')
+  })
+
+  it('warns when total input tokens show no meaningful change but fresh-token usage regresses', () => {
+    const result = buildSummaryResult({
+      question: 'regression honesty',
+      baselineTurns: 5,
+      madarTurns: 4,
+      baselineDurationMs: 42000,
+      madarDurationMs: 39000,
+      baselineInputTokens: 388718,
+      madarInputTokens: 367859,
+      reductions: {
+        num_turns: 1.25,
+        duration_ms: 1.08,
+        input_tokens: 1.06,
+        cost_usd: 0.87,
+      },
+    })
+    const report = result.reports[0]
+    if (!report || report.baseline.kind !== 'succeeded' || report.madar.kind !== 'succeeded') {
+      throw new Error('summary fixture should produce succeeded runs')
+    }
+    report.baseline.usage = BASELINE_TOKEN_REGRESSION_PAYLOAD.usage
+    report.baseline.total_input_tokens_anthropic_exact = 388718
+    report.baseline.uncached_input_tokens_anthropic_exact = 64678
+    report.baseline.cached_input_tokens_anthropic_exact = 324040
+    report.madar.usage = MADAR_TOKEN_REGRESSION_PAYLOAD.usage
+    report.madar.total_input_tokens_anthropic_exact = 367859
+    report.madar.uncached_input_tokens_anthropic_exact = 90328
+    report.madar.cached_input_tokens_anthropic_exact = 277531
+
+    const summary = formatNativeAgentCompareSummary(result)
+
+    expect(summary).toContain('input_tokens (Anthropic-reported): baseline 388718 → madar 367859 (no meaningful change)')
+    expect(summary).toContain('WARNING: fresh-token regression')
+    expect(summary).toContain('uncached_input_tokens')
+    expect(summary).toContain('cache_creation_input_tokens')
   })
 })

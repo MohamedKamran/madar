@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { type CliDependencies, executeCli, formatHelp } from '../../src/cli/main.js'
 import {
   parseAddArgs,
+  parseBenchSuiteArgs,
   parseBenchmarkArgs,
   parseCompareArgs,
   parseDoctorArgs,
@@ -130,6 +131,7 @@ function createDependencies(): CliTestDependencies {
       }
     },
     runEval: () => 'madar retrieval quality benchmark\nRecall: 100.0%\ncreate session login',
+    runBenchSuite: async () => 'bench suite command is not implemented yet',
     runCompare: async () => 'compare command is not implemented yet',
     runReviewCompare: async () => 'review compare command is not implemented yet',
     runTimeTravel: async () => 'time-travel command is not implemented yet',
@@ -281,11 +283,50 @@ describe('cli parser', () => {
     })
   })
 
+  it('parses pack args with generic and agent-specific formats', () => {
+    expect(parsePackArgs(['how does auth work', '--format', 'text'])).toEqual({
+      prompt: 'how does auth work',
+      budget: 3000,
+      task: 'explain',
+      graphPath: 'out/graph.json',
+      format: 'text',
+    })
+    expect(parsePackArgs(['how does auth work', '--format', 'markdown'])).toEqual({
+      prompt: 'how does auth work',
+      budget: 3000,
+      task: 'explain',
+      graphPath: 'out/graph.json',
+      format: 'markdown',
+    })
+    expect(parsePackArgs(['how does auth work', '--format', 'claude'])).toEqual({
+      prompt: 'how does auth work',
+      budget: 3000,
+      task: 'explain',
+      graphPath: 'out/graph.json',
+      format: 'claude',
+    })
+    expect(parsePackArgs(['how does auth work', '--format', 'copilot'])).toEqual({
+      prompt: 'how does auth work',
+      budget: 3000,
+      task: 'explain',
+      graphPath: 'out/graph.json',
+      format: 'copilot',
+    })
+    expect(parsePackArgs(['how does auth work', '--format=json'])).toEqual({
+      prompt: 'how does auth work',
+      budget: 3000,
+      task: 'explain',
+      graphPath: 'out/graph.json',
+      format: 'json',
+    })
+  })
+
   it('rejects invalid pack args', () => {
     expect(() => parsePackArgs([])).toThrow('Usage: madar pack')
     expect(() => parsePackArgs(['how does auth work', '--budget', '0'])).toThrow('error: --budget must be a positive integer')
     expect(() => parsePackArgs(['how does auth work', '--budget', '100001'])).toThrow('error: --budget must be <= 100000')
     expect(() => parsePackArgs(['how does auth work', '--task', 'summarize'])).toThrow('error: --task must be one of explain, implement, review, impact')
+    expect(() => parsePackArgs(['how does auth work', '--format', 'yaml'])).toThrow('error: --format must be one of json, text, markdown, claude, copilot')
     expect(() => parsePackArgs(['how does auth work', '--wat'])).toThrow('error: unknown option for pack: --wat')
   })
 
@@ -459,6 +500,47 @@ describe('cli parser', () => {
     expect(() => parseBenchmarkArgs(['custom.json', '--wat'])).toThrow('error: unknown option for benchmark: --wat')
   })
 
+  it('parses bench:suite args', () => {
+    expect(parseBenchSuiteArgs(['--dry-run'])).toEqual({
+      repo: null,
+      task: null,
+      mode: 'all',
+      trials: 3,
+      outputDir: resolve('docs/benchmarks/suite/results'),
+      execTemplate: '',
+      dryRun: true,
+      yes: false,
+    })
+    expect(parseBenchSuiteArgs([
+      '--exec',
+      'claude -p "$(cat {prompt_file})"',
+      '--repo',
+      'nestjs-mid',
+      '--task',
+      'explain-runtime',
+      '--mode',
+      'warm',
+      '--trials',
+      '5',
+      '--output-dir',
+      'docs/benchmarks/suite/results/custom',
+      '--yes',
+    ])).toEqual({
+      repo: 'nestjs-mid',
+      task: 'explain-runtime',
+      mode: 'warm',
+      trials: 5,
+      outputDir: resolve('docs/benchmarks/suite/results/custom'),
+      execTemplate: 'claude -p "$(cat {prompt_file})"',
+      dryRun: false,
+      yes: true,
+    })
+    expect(() => parseBenchSuiteArgs([])).toThrow('error: --exec is required unless --dry-run is set')
+    expect(() => parseBenchSuiteArgs(['--mode', 'weird', '--dry-run'])).toThrow('error: --mode must be one of cold, warm, all')
+    expect(() => parseBenchSuiteArgs(['--trials', '0', '--dry-run'])).toThrow('error: --trials must be a positive integer')
+    expect(() => parseBenchSuiteArgs(['--wat', '--dry-run'])).toThrow('error: unknown option for bench:suite: --wat')
+  })
+
   it('parses compare args with a question or question file', () => {
     expect(parseCompareArgs(['how does login work', '--exec', 'claude -p "$(cat {prompt_file})"'])).toEqual({
       question: 'how does login work',
@@ -467,6 +549,7 @@ describe('cli parser', () => {
       questionsPath: null,
       outputDir: resolve('out/compare'),
       baselineMode: 'full',
+      allowNoInstall: false,
       yes: false,
       limit: null,
     })
@@ -478,6 +561,7 @@ describe('cli parser', () => {
       questionsPath: 'benchmark-questions.json',
       outputDir: resolve('out/compare'),
       baselineMode: 'full',
+      allowNoInstall: false,
       yes: false,
       limit: null,
     })
@@ -495,6 +579,7 @@ describe('cli parser', () => {
         'out/compare/custom',
         '--baseline-mode',
         'bounded',
+        '--allow-no-install',
         '--yes',
         '--limit',
         '5',
@@ -506,6 +591,7 @@ describe('cli parser', () => {
       questionsPath: null,
       outputDir: resolve('out/compare/custom'),
       baselineMode: 'bounded',
+      allowNoInstall: true,
       yes: true,
       limit: 5,
     })
@@ -527,6 +613,7 @@ describe('cli parser', () => {
       questionsPath: null,
       outputDir: resolve('out/compare'),
       baselineMode: 'pack_only',
+      allowNoInstall: false,
       yes: false,
       limit: null,
     })
@@ -547,6 +634,7 @@ describe('cli parser', () => {
     questionsPath: null,
     outputDir: resolve('out/compare'),
     baselineMode: 'full',
+    allowNoInstall: false,
     yes: false,
     limit: null,
     why: true,
@@ -573,8 +661,8 @@ describe('cli parser', () => {
     expect(() => parseCompareArgs(['how does login work', '--exec', 'claude -p "$(cat {prompt_file})"', '--output-dir', '../outside'])).toThrow(
       'Only paths inside out/ are permitted',
     )
-    expect(() => parseCompareArgs(['   ', '--exec', 'claude -p "$(cat {prompt_file})"'])).toThrow('Usage: madar compare')
-    expect(() => parseCompareArgs(['--exec', 'claude -p "$(cat {prompt_file})"'])).toThrow('Usage: madar compare')
+    expect(() => parseCompareArgs(['   ', '--exec', 'claude -p "$(cat {prompt_file})"'])).toThrow('--allow-no-install')
+    expect(() => parseCompareArgs(['--exec', 'claude -p "$(cat {prompt_file})"'])).toThrow('--allow-no-install')
   })
 
   it('parses review-compare args with optional overrides', () => {
@@ -935,6 +1023,7 @@ describe('cli main', () => {
     expect(help).toContain('--obsidian')
     expect(help).toContain('--svg')
     expect(help).toContain('--graphml')
+    expect(help).toContain('--allow-no-install')
     expect(help).toContain('--neo4j')
     expect(help).toContain('--neo4j-push')
     expect(help).toContain('--transport')
@@ -955,8 +1044,12 @@ describe('cli main', () => {
     expect(help).toContain('    --exec TEMPLATE       required command template; supports {prompt_file}, {question}, {mode}, and {output_file}')
     expect(help).toContain('--questions PATH')
     expect(help).toContain('    --yes                 skip confirmation before running the paid benchmark/eval prompts')
+    expect(help).toContain('bench:suite')
+    expect(help).toContain('docs/benchmarks/suite/results/')
+    expect(help).toContain('    --dry-run             list planned and runnable suite cells without executing prompts')
     expect(help).toContain('eval [graph.json]')
     expect(help).toContain('compare [question]    run a real baseline vs madar prompt comparison')
+    expect(help).toContain('    --format MODE       json|text|markdown|claude|copilot (default json)')
     expect(help).toContain('    --graph <path>        path to graph.json (default out/graph.json)')
     expect(help).toContain('    --exec TEMPLATE       required command template; supports {prompt_file}, {question}, {mode}, and {output_file}')
     expect(help).toContain('    --questions PATH      load questions from a JSON file instead of a positional question')
@@ -1042,6 +1135,7 @@ describe('cli main', () => {
       questionsPath: 'benchmark-questions.json',
       outputDir: resolve('out/compare/custom'),
       baselineMode: 'bounded',
+      allowNoInstall: false,
       yes: true,
       limit: 5,
       why: true,
@@ -1049,6 +1143,81 @@ describe('cli main', () => {
     expect(compareRequest.io).toBe(io)
     await expect(compareRequest.confirm('Proceed?')).resolves.toBe(true)
     expect(confirmCalls).toBe(1)
+  })
+
+  it('routes bench:suite through the injected dependency after parsing args', async () => {
+    const { io, logs, errors } = createIo()
+    const dependencies = createDependencies()
+    let capturedRequest: unknown
+
+    dependencies.runBenchSuite = async (request) => {
+      capturedRequest = request
+      return 'bench suite result'
+    }
+
+    const exitCode = await executeCli(
+      [
+        'bench:suite',
+        '--exec',
+        'claude -p "$(cat {prompt_file})"',
+        '--repo',
+        'nestjs-mid',
+        '--task',
+        'explain-runtime',
+        '--mode',
+        'warm',
+        '--trials',
+        '5',
+        '--output-dir',
+        'docs/benchmarks/suite/results/custom',
+        '--yes',
+      ],
+      io,
+      dependencies,
+    )
+
+    expect(exitCode).toBe(0)
+    expect(logs).toEqual(['bench suite result'])
+    expect(errors).toEqual([])
+    const benchSuiteRequest = capturedRequest as {
+      options: ReturnType<typeof parseBenchSuiteArgs>
+      io: typeof io
+    }
+    expect(benchSuiteRequest.options).toEqual({
+      repo: 'nestjs-mid',
+      task: 'explain-runtime',
+      mode: 'warm',
+      trials: 5,
+      outputDir: resolve('docs/benchmarks/suite/results/custom'),
+      execTemplate: 'claude -p "$(cat {prompt_file})"',
+      dryRun: false,
+      yes: true,
+    })
+    expect(benchSuiteRequest.io).toBe(io)
+  })
+
+  it('runs bench:suite dry-run without confirmation', async () => {
+    const { io, logs, errors } = createIo()
+    const dependencies = createDependencies()
+    let confirmCalls = 0
+    let benchSuiteCalls = 0
+
+    dependencies.confirm = async () => {
+      confirmCalls += 1
+      return true
+    }
+    dependencies.runBenchSuite = async () => {
+      benchSuiteCalls += 1
+      return 'bench suite dry run'
+    }
+
+    const exitCode = await executeCli(['bench:suite', '--dry-run'], io, dependencies)
+
+    expect(exitCode).toBe(0)
+    expect(benchSuiteCalls).toBe(1)
+    expect(confirmCalls).toBe(0)
+    expect(logs).toEqual(['bench suite dry run'])
+    expect(errors).toEqual([])
   })
 
   it('routes review-compare through the injected dependency after parsing args', async () => {
@@ -1221,6 +1390,26 @@ describe('cli main', () => {
     }
   })
 
+  it('fails fast when bench:suite is run without --yes in non-interactive mode', async () => {
+    const { io, logs, errors } = createIo()
+    const stdinTty = process.stdin.isTTY
+    const stdoutTty = process.stdout.isTTY
+
+    Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: false })
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: false })
+
+    try {
+      const exitCode = await executeCli(['bench:suite', '--exec', 'claude -p "$(cat {prompt_file})"'], io)
+
+      expect(exitCode).toBe(2)
+      expect(logs).toEqual(['Warning: bench:suite will execute baseline, madar, and SPI suite prompts. This may consume paid model tokens.'])
+      expect(errors).toEqual(['error: bench:suite requires --yes in non-interactive mode.'])
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { configurable: true, value: stdinTty })
+      Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: stdoutTty })
+    }
+  })
+
   it('returns a usage error when compare args are incomplete', async () => {
     const { io, logs, errors } = createIo()
 
@@ -1228,7 +1417,7 @@ describe('cli main', () => {
 
     expect(exitCode).toBe(2)
     expect(logs).toEqual([])
-    expect(errors).toEqual(['Usage: madar compare [question] --exec TEMPLATE [--graph path] [--questions PATH] [--output-dir DIR] [--baseline-mode MODE] [--yes] [--limit N]'])
+    expect(errors).toEqual(['Usage: madar compare [question] --exec TEMPLATE [--graph path] [--questions PATH] [--output-dir DIR] [--baseline-mode MODE] [--allow-no-install] [--yes] [--limit N]'])
   })
 
   it('prefers the explicit compare command over an implicit generate path match', async () => {

@@ -7,6 +7,7 @@ import type {
   ContextPackClaim,
   ContextPackCoverage,
   ContextPackEvidenceClass,
+  ContextPackExecutionPhase,
   ContextPackExpandableFollowUp,
   ContextPackExpandableRef,
   ContextPackNode,
@@ -29,11 +30,26 @@ import { pickImpactTarget } from '../context-pack-target.js'
 import { analyzeImpact, callChains, compactImpactResult, type ImpactResult } from '../impact.js'
 import { analyzePrImpact, compactPrImpactResult } from '../pr-impact.js'
 import { relevantFiles } from '../relevant-files.js'
-import { collectRelationships, compactRetrieveResult, contextPackFromRetrieveResult, readSnippet, retrieveContext, retrieveContextAsync, type RetrieveResult } from '../retrieve.js'
+import {
+  collectRelationships,
+  compactRetrieveResult,
+  contextPackFromRetrieveResult,
+  readSnippet,
+  retrieveContext,
+  retrieveContextAsync,
+  withRetrieveSnippetBudget,
+  type RetrieveResult,
+  type RetrieveSnippetOptions,
+} from '../retrieve.js'
 import { computeContextPackDiagnostics } from '../context-pack-diagnostics.js'
 import { collectPackNodeIds, computeDeltaContextPack } from '../context-pack-delta.js'
 import { applyContextPackResolution, type ContextPackResolution } from '../context-pack-resolution.js'
 import { buildImplementationPackGuidance } from '../implementation-pack.js'
+import {
+  buildMadarResponseEvidence,
+  collectWorkflowOwners,
+  missingPhasesFromPayload,
+} from '../mcp-response-evidence.js'
 import { resolveTaskSelection } from '../task-intent.js'
 import { riskMap } from '../risk-map.js'
 import { buildTaskContextPlan } from '../task-context-planner.js'
@@ -308,6 +324,60 @@ function contextMetadata(
     missing_semantic: coverage.missing_semantic,
     ...(payload.retrieval_gate ? { retrieval_gate: payload.retrieval_gate } : {}),
   }
+}
+
+function evidenceForRetrievePayload(
+  payload: Partial<Pick<RetrieveResult, 'coverage' | 'answer_contract' | 'execution_slice'>> & {
+    matched_nodes?: Array<{ source_file: string }>
+  },
+) {
+  return buildMadarResponseEvidence({
+    coverage: payload.coverage,
+    missingPhases: missingPhasesFromPayload(payload),
+    coveredWorkflowOwners: collectWorkflowOwners((payload.matched_nodes ?? []).map((node) => node.source_file)),
+  })
+}
+
+function evidenceForPathPayload(
+  payload: Partial<Pick<RetrieveResult, 'coverage' | 'answer_contract' | 'execution_slice'>> & {
+    relevant_files?: Array<{ path: string }>
+    starter_files?: Array<{ path: string }>
+    edit_steps?: Array<{ path: string }>
+  },
+) {
+  return buildMadarResponseEvidence({
+    coverage: payload.coverage,
+    missingPhases: missingPhasesFromPayload(payload),
+    coveredWorkflowOwners: collectWorkflowOwners(
+      (payload.relevant_files ?? []).map((entry) => entry.path),
+      (payload.starter_files ?? []).map((entry) => entry.path),
+      (payload.edit_steps ?? []).map((entry) => entry.path),
+    ),
+  })
+}
+
+function evidenceForImpactPayload(payload: {
+  target_file?: string
+  affected_files?: string[]
+  direct_dependents?: Array<{ source_file: string }>
+  transitive_dependents?: Array<{ source_file: string }>
+}) {
+  return buildMadarResponseEvidence({
+    coveredWorkflowOwners: collectWorkflowOwners(
+      payload.target_file ? [payload.target_file] : [],
+      payload.affected_files ?? [],
+      (payload.direct_dependents ?? []).map((entry) => entry.source_file),
+      (payload.transitive_dependents ?? []).map((entry) => entry.source_file),
+    ),
+  })
+}
+
+function evidenceForGraphSummaryPayload(payload: {
+  entrypoints?: Array<{ source_file: string }>
+}) {
+  return buildMadarResponseEvidence({
+    coveredWorkflowOwners: collectWorkflowOwners((payload.entrypoints ?? []).map((entry) => entry.source_file)),
+  })
 }
 
 function parseContextSessionState(raw: unknown): ContextSessionState | null {
@@ -713,6 +783,7 @@ function buildFocusedExpansionPayload(
     pack: compactRetrieveResult(retrieval),
     matched_focus: nodeCandidates.length,
     ...metadata,
+    evidence: evidenceForRetrievePayload(retrieval),
   }
 }
 
@@ -777,8 +848,13 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
     }
     case 'graph_stats':
       return helpers.ok(id, helpers.textToolResult(graphStats(graph)))
-    case 'graph_summary':
-      return helpers.ok(id, helpers.textToolResult(JSON.stringify(buildGraphSummary(graph))))
+    case 'graph_summary': {
+      const summary = buildGraphSummary(graph)
+      return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+        ...summary,
+        evidence: evidenceForGraphSummaryPayload(summary),
+      })))
+    }
     case 'god_nodes':
       return helpers.ok(id, helpers.textToolResult(godNodesSummary(graph, helpers.numberParamAlias(toolArguments, ['top_n', 'topN'], { min: 1, max: 100 }) ?? 10)))
     case 'get_community': {
@@ -830,13 +906,17 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         ...(edgeTypes && edgeTypes.length > 0 ? { edgeTypes } : {}),
       })
       const useVerboseImpact = toolArguments.verbose === true || toolArguments.compact === false
+      const impactPayload = useVerboseImpact
+        ? impactResult
+        : {
+            ...compactImpactResult(impactResult),
+            missing_context: [],
+          }
       return helpers.ok(id, helpers.textToolResult(JSON.stringify(
-        useVerboseImpact
-          ? impactResult
-          : {
-              ...compactImpactResult(impactResult),
-              missing_context: [],
-            },
+        {
+          ...impactPayload,
+          evidence: evidenceForImpactPayload(impactResult),
+        },
       )))
     }
     case 'call_chain': {
@@ -873,12 +953,22 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
       })
       const useVerbosePrImpact = toolArguments.verbose === true || toolArguments.compact === false
       if (useVerbosePrImpact) {
-        return helpers.ok(id, helpers.textToolResult(JSON.stringify(prResult)))
+        return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+          ...prResult,
+          evidence: buildMadarResponseEvidence({
+            coverage: prResult.review_bundle.coverage,
+            coveredWorkflowOwners: collectWorkflowOwners(prResult.changed_files),
+          }),
+        })))
       }
       const compactPrImpact = compactPrImpactResult(prResult)
       return helpers.ok(id, helpers.textToolResult(JSON.stringify({
         ...compactPrImpact,
         missing_context: (prResult.review_bundle.coverage ?? emptyCoverage()).missing_required,
+        evidence: buildMadarResponseEvidence({
+          coverage: prResult.review_bundle.coverage,
+          coveredWorkflowOwners: collectWorkflowOwners(prResult.changed_files),
+        }),
       })))
     }
     case 'retrieve': {
@@ -908,6 +998,14 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
       const retrieveRerank = toolArguments.rerank === true
       const retrieveSemanticModel = helpers.stringParamAlias(toolArguments, ['semantic_model', 'semanticModel'])
       const retrieveRerankModel = helpers.stringParamAlias(toolArguments, ['rerank_model', 'rerankModel'])
+      const retrieveSnippetBudget = helpers.numberParamAlias(toolArguments, ['snippet_budget', 'snippetBudget'], { min: 0, max: helpers.maxStdioTokenBudget })
+      if ((Object.hasOwn(toolArguments, 'snippet_budget') || Object.hasOwn(toolArguments, 'snippetBudget')) && retrieveSnippetBudget === null) {
+        return helpers.failure(id, helpers.jsonrpcInvalidParams, `snippet_budget must be a number between 0 and ${helpers.maxStdioTokenBudget}`)
+      }
+      const retrieveTopNWithSnippet = helpers.numberParamAlias(toolArguments, ['top_n_with_snippet', 'topNWithSnippet'], { min: 0 })
+      if ((Object.hasOwn(toolArguments, 'top_n_with_snippet') || Object.hasOwn(toolArguments, 'topNWithSnippet')) && retrieveTopNWithSnippet === null) {
+        return helpers.failure(id, helpers.jsonrpcInvalidParams, 'top_n_with_snippet must be a non-negative number')
+      }
       // #75 manual override: numeric retrieval_level argument (0-5) bypasses
       // the gate's heuristics and forces the supplied level. numberParamAlias
       // already enforces the range and returns null for absent/out-of-range
@@ -919,6 +1017,10 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
       const retrieveStrategy = parseRetrievalStrategyParam(helpers, toolArguments)
       if (retrieveStrategy === 'invalid') {
         return helpers.failure(id, helpers.jsonrpcInvalidParams, 'retrieval_strategy must be one of default, slice-v1')
+      }
+      const retrieveSnippetOptions: RetrieveSnippetOptions = {
+        ...(retrieveSnippetBudget !== null ? { snippetBudget: retrieveSnippetBudget } : {}),
+        ...(retrieveTopNWithSnippet !== null ? { topNWithSnippet: retrieveTopNWithSnippet } : {}),
       }
       const retrieveLevelTyped = retrieveLevelOverride === null ? null : (retrieveLevelOverride as 0 | 1 | 2 | 3 | 4 | 5)
       const retrieval = retrieveSemantic || retrieveRerank ? retrieveContextAsync(graph, {
@@ -941,14 +1043,18 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
           ...(retrieveStrategy ? { retrievalStrategy: retrieveStrategy } : {}),
         }))
       const useVerboseRetrieve = toolArguments.verbose === true || toolArguments.compact === false
-      return retrieval.then((result) => helpers.ok(id, helpers.textToolResult(JSON.stringify(
-        useVerboseRetrieve
-          ? result
+      return retrieval.then((result) => {
+        const payload = useVerboseRetrieve
+          ? withRetrieveSnippetBudget(result, retrieveSnippetOptions)
           : {
-              ...compactRetrieveResult(result),
+              ...compactRetrieveResult(result, retrieveSnippetOptions),
               ...contextMetadata(result),
-            },
-      ))))
+            }
+        return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+          ...payload,
+          evidence: evidenceForRetrievePayload(result),
+        })))
+      })
     }
     case 'context_pack': {
       const prompt = helpers.stringParam(toolArguments, 'prompt')
@@ -1197,6 +1303,11 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
             : {}),
           ...(implementation ? { implementation } : {}),
           ...metadata,
+          evidence: buildMadarResponseEvidence({
+            coverage: deltaResult.delta_pack.coverage,
+            missingPhases: missingPhasesFromPayload(deltaResult.delta_pack),
+            coveredWorkflowOwners: collectWorkflowOwners(resolvedDeltaNodes.nodes.map((node) => node.source_file)),
+          }),
         })))
       }
       const resolvedNodes = applyResolutionToNodes(compactPack.matched_nodes, compactPack.relationships)
@@ -1216,6 +1327,11 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
           : {}),
         ...(implementation ? { implementation } : {}),
         ...metadata,
+        evidence: buildMadarResponseEvidence({
+          coverage: fullPack.coverage,
+          missingPhases: missingPhasesFromPayload(fullPack),
+          coveredWorkflowOwners: collectWorkflowOwners(resolvedNodes.nodes.map((node) => node.source_file)),
+        }),
       }
       if (!cacheKey || !cacheGraphVersion) {
         return helpers.ok(id, helpers.textToolResult(JSON.stringify(basePayload)))
@@ -1333,6 +1449,7 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
               token_count: promptPack.token_count,
             },
         ...contextMetadata(retrieval),
+        evidence: evidenceForRetrievePayload(retrieval),
       })))
     }
     case 'context_session_reset': {
@@ -1370,7 +1487,10 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         ...(relevantCommunity !== null ? { community: relevantCommunity } : {}),
         ...(relevantFileType ? { fileType: relevantFileType } : {}),
       })
-      return helpers.ok(id, helpers.textToolResult(JSON.stringify(result)))
+      return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+        ...result,
+        evidence: evidenceForPathPayload(result),
+      })))
     }
     case 'feature_map': {
       const question = helpers.stringParam(toolArguments, 'question')
@@ -1397,7 +1517,10 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         ...(featureCommunity !== null ? { community: featureCommunity } : {}),
         ...(featureFileType ? { fileType: featureFileType } : {}),
       })
-      return helpers.ok(id, helpers.textToolResult(JSON.stringify(result)))
+      return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+        ...result,
+        evidence: evidenceForPathPayload(result),
+      })))
     }
     case 'risk_map': {
       const question = helpers.stringParam(toolArguments, 'question')
@@ -1424,7 +1547,10 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         ...(riskCommunity !== null ? { community: riskCommunity } : {}),
         ...(riskFileType ? { fileType: riskFileType } : {}),
       })
-      return helpers.ok(id, helpers.textToolResult(JSON.stringify(result)))
+      return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+        ...result,
+        evidence: evidenceForPathPayload(result),
+      })))
     }
     case 'implementation_checklist': {
       const question = helpers.stringParam(toolArguments, 'question')
@@ -1451,7 +1577,10 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         ...(checklistCommunity !== null ? { community: checklistCommunity } : {}),
         ...(checklistFileType ? { fileType: checklistFileType } : {}),
       })
-      return helpers.ok(id, helpers.textToolResult(JSON.stringify(result)))
+      return helpers.ok(id, helpers.textToolResult(JSON.stringify({
+        ...result,
+        evidence: evidenceForPathPayload(result),
+      })))
     }
     case 'time_travel_compare': {
       const fromRef = helpers.stringParamAlias(toolArguments, ['from_ref', 'fromRef'])
