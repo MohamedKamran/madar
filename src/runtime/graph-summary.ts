@@ -63,6 +63,7 @@ type NodeSummary = {
   predecessors: string[]
   successors: string[]
   explicitEntrySignal: boolean
+  runtimeStartSignal: boolean
   runtimeEligible: boolean
   sourceDomain: string
 }
@@ -130,6 +131,35 @@ function isExplicitEntrypoint(attributes: Record<string, unknown>): boolean {
   return RUNTIME_METADATA_KEYS.some((key) => frameworkMetadataString(attributes, key).length > 0)
 }
 
+function normalizedRuntimeStartText(...values: unknown[]): string {
+  return values
+    .map(normalizeString)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function isExplicitRuntimeStart(attributes: Record<string, unknown>): boolean {
+  if (isExplicitEntrypoint(attributes)) {
+    return true
+  }
+
+  const roleText = normalizedRuntimeStartText(
+    attributes.node_kind,
+    attributes.framework_role,
+  )
+  if (/\b(worker|processor|consumer|queue consumer|event handler|job|task)\b/.test(roleText)) {
+    return true
+  }
+
+  const nodeText = normalizedRuntimeStartText(
+    attributes.label,
+    attributes.source_file,
+  )
+  return /\b(worker|processor|consumer|queue consumer|event handler)\b/.test(nodeText)
+}
+
 function normalizedFramework(attributes: Record<string, unknown>): string {
   const framework = normalizeString(attributes.framework).toLowerCase()
   if (framework.length > 0) {
@@ -185,6 +215,7 @@ function buildNodeSummaries(graph: KnowledgeGraph, communityLabels: Record<numbe
       predecessors: graph.predecessors(nodeId),
       successors: graph.successors(nodeId),
       explicitEntrySignal: isExplicitEntrypoint(attributes),
+      runtimeStartSignal: isExplicitRuntimeStart(attributes),
       runtimeEligible,
       sourceDomain,
     }
@@ -297,7 +328,7 @@ function startNodeScore(node: NodeSummary, graph: KnowledgeGraph): number {
   const normalized = runtimeNodeText(node, graph)
 
   let score = 0
-  if (node.explicitEntrySignal) {
+  if (node.runtimeStartSignal) {
     score += 6
   }
   if (node.predecessors.length === 0) {
@@ -383,7 +414,7 @@ function runtimeEntryCandidates(nodes: readonly NodeSummary[]): NodeSummary[] {
     .filter((node) => node.runtimeEligible && node.successors.some((neighbor) => runtimeNodeIds.has(neighbor)))
     .filter((node) => {
       const runtimePredecessors = node.predecessors.filter((neighbor) => runtimeNodeIds.has(neighbor))
-      return runtimePredecessors.length === 0 || node.explicitEntrySignal
+      return runtimePredecessors.length === 0 || node.runtimeStartSignal
     })
 }
 

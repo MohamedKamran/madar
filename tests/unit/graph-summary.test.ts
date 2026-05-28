@@ -32,6 +32,22 @@ function padIndex(index: number): string {
   return index.toString().padStart(2, '0')
 }
 
+function stableRuntimePathOrderForTest(from: string, to: string, fromSourceFile: string, toSourceFile: string): number {
+  const input = [
+    from,
+    to,
+    fromSourceFile,
+    toSourceFile,
+  ].join('\u0000')
+
+  let hash = 2166136261
+  for (let index = 0; index < input.length; index++) {
+    hash ^= input.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
+}
+
 function makeRichGraph(options?: {
   graphVersion?: string
   generatedAt?: string
@@ -404,14 +420,20 @@ describe('buildGraphSummary', () => {
   it('caps runtime_paths with deterministic non-lexical tie-breaking', () => {
     const graph = makeManyRuntimePathsGraph()
     const summary = buildGraphSummary(graph)
-    const alphabeticalRuntimePaths = Array.from({ length: SUMMARY_ARRAY_CAP }, (_, index) => {
+    const expectedRuntimePaths = Array.from({ length: SUMMARY_ARRAY_CAP + 2 }, (_, index) => {
       const suffix = padIndex(index)
       return {
         from: `RuntimeEntry${suffix}`,
         to: `RuntimeSink${suffix}`,
         hops: 2,
+        fromSourceFile: `src/runtime/entry-${suffix}.ts`,
+        toSourceFile: `src/runtime/sink-${suffix}.ts`,
       }
     })
+      .sort((left, right) => stableRuntimePathOrderForTest(left.from, left.to, left.fromSourceFile, left.toSourceFile)
+        - stableRuntimePathOrderForTest(right.from, right.to, right.fromSourceFile, right.toSourceFile))
+      .slice(0, SUMMARY_ARRAY_CAP)
+      .map(({ from, to, hops }) => ({ from, to, hops }))
 
     expect(summary.runtime_paths).toBeInstanceOf(Array)
     expect(summary.runtime_paths).toHaveLength(SUMMARY_ARRAY_CAP)
@@ -423,7 +445,7 @@ describe('buildGraphSummary', () => {
       expect(path.hops).toBeGreaterThanOrEqual(1)
     }
 
-    expect(summary.runtime_paths).not.toEqual(alphabeticalRuntimePaths)
+    expect(summary.runtime_paths).toEqual(expectedRuntimePaths)
 
     const repeatedSummary = buildGraphSummary(graph)
     expect(repeatedSummary.runtime_paths).toEqual(summary.runtime_paths)
@@ -555,6 +577,56 @@ describe('buildGraphSummary', () => {
     ])
   })
 
+  it('admits worker-style runtime starts even when they have runtime predecessors', () => {
+    const graph = new KnowledgeGraph(true)
+
+    graph.addNode('registration', {
+      label: 'QueueRegistrar.register',
+      source_file: 'src/queue/register.ts',
+      source_location: 'L1',
+      file_type: 'code',
+      community: 0,
+      source_domain: 'production',
+    })
+    graph.addNode('worker', {
+      label: 'ReportWorker.process',
+      source_file: 'src/reports/report.worker.ts',
+      source_location: 'L1',
+      file_type: 'code',
+      community: 0,
+      source_domain: 'production',
+      framework_role: 'worker',
+    })
+    graph.addNode('repository', {
+      label: 'ReportRepository.save',
+      source_file: 'src/reports/report.repository.ts',
+      source_location: 'L1',
+      file_type: 'code',
+      community: 0,
+      source_domain: 'production',
+      framework_role: 'repository',
+    })
+
+    graph.addEdge('registration', 'worker', {
+      relation: 'calls',
+      confidence: 'EXTRACTED',
+      source_file: 'src/queue/register.ts',
+    })
+    graph.addEdge('worker', 'repository', {
+      relation: 'calls',
+      confidence: 'EXTRACTED',
+      source_file: 'src/reports/report.worker.ts',
+    })
+
+    const summary = buildGraphSummary(graph)
+
+    expect(summary.runtime_paths).toContainEqual({
+      from: 'ReportWorker.process',
+      to: 'ReportRepository.save',
+      hops: 1,
+    })
+  })
+
   it('keeps queue-backed runtime paths detectable even when reverse runtime edges exist', () => {
     const graph = makeBidirectionalRuntimePipelineGraph()
     const summary = buildGraphSummary(graph)
@@ -564,6 +636,11 @@ describe('buildGraphSummary', () => {
         from: 'IdeasController.generate',
         to: 'ReportRepository.save',
         hops: 4,
+      },
+      {
+        from: 'OrchestratorWorker.process',
+        to: 'ReportRepository.save',
+        hops: 1,
       },
     ])
   })
