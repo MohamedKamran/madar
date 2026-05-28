@@ -200,7 +200,7 @@ describe('answer-ready explain pack', () => {
     expect(result?.must_cite.length).toBeGreaterThan(0)
   })
 
-  test('generateAnswerReadyFromExecutionSlice returns undefined when no citeable steps exist', () => {
+  test('generateAnswerReadyFromExecutionSlice returns fallback answer_ready with empty must_cite when no citeable steps exist', () => {
     const executionSlice: ContextPackExecutionSlice = {
       status: 'complete',
       confidence: 'high',

@@ -1652,9 +1652,12 @@ function collectBenchmarkReadinessSourceFiles(retrieval: RetrieveResult): string
 }
 
 function suggestBenchmarkGraphScope(graphPath: string, sourceFiles: readonly string[]): string | null {
+  const projectRoot = inferProjectRootFromGraphPath(graphPath)
+  const normalizedGraphPath = resolve(graphPath).replaceAll('\\', '/')
   const scopes = new Set<string>()
   for (const sourceFile of sourceFiles) {
-    const [scope] = sourceFile.split('/', 1)
+    const relSourceFile = isAbsolute(sourceFile) ? relative(projectRoot, sourceFile) : sourceFile
+    const [scope] = relSourceFile.replaceAll('\\', '/').split('/', 1)
     if (scope && !['src', 'test', 'tests', 'docs'].includes(scope)) {
       scopes.add(scope)
     }
@@ -1666,7 +1669,7 @@ function suggestBenchmarkGraphScope(graphPath: string, sourceFiles: readonly str
 
   const [scope] = [...scopes]
   const suggested = `${scope}/out/graph.json`
-  return graphPath.endsWith(`/${suggested}`) ? null : suggested
+  return normalizedGraphPath.endsWith(`/${suggested}`) ? null : suggested
 }
 
 function retrievalHasSpiEvidence(retrieval: RetrieveResult): boolean {
@@ -3116,6 +3119,7 @@ async function runNativeAgentArmWithTimeout(
 
   return await new Promise((resolveExecution, rejectExecution) => {
     let settled = false
+    let timedOut = false
     const startedAt = Date.now()
     const heartbeatId = heartbeatIntervalMs > 0
       ? setInterval(() => {
@@ -3132,10 +3136,20 @@ async function runNativeAgentArmWithTimeout(
       if (settled) {
         return
       }
-      settled = true
+      timedOut = true
       controller.abort()
-      cleanup()
-      resolveExecution({ kind: 'timed_out' } as const)
+      // Wait for the runner to settle after abort, but don't wait forever.
+      // A 200ms grace allows well-behaved runners to flush state before we finalize.
+      Promise.race([
+        runnerPromise.then(() => {}, () => {}),
+        new Promise<void>((res) => { setTimeout(res, 200) }),
+      ]).then(() => {
+        if (!settled) {
+          settled = true
+          cleanup()
+          resolveExecution({ kind: 'timed_out' } as const)
+        }
+      }, () => {})
     }, timeoutMs)
 
     runnerPromise.then(
@@ -3145,7 +3159,7 @@ async function runNativeAgentArmWithTimeout(
         }
         settled = true
         cleanup()
-        resolveExecution({ kind: 'completed', result } as const)
+        resolveExecution(timedOut ? ({ kind: 'timed_out' } as const) : ({ kind: 'completed', result } as const))
       },
       (error) => {
         if (settled) {
@@ -3153,7 +3167,11 @@ async function runNativeAgentArmWithTimeout(
         }
         settled = true
         cleanup()
-        rejectExecution(error)
+        if (timedOut) {
+          resolveExecution({ kind: 'timed_out' } as const)
+        } else {
+          rejectExecution(error)
+        }
       },
     )
   })
@@ -3489,7 +3507,10 @@ function assessNativeAgentPromptContract(report: Pick<NativeAgentCompareReport, 
     evidence.push('broad exploration occurred before the first Madar call')
   }
   if (report.madar_trace.broad_exploration_tool_call_count > 0) {
-    evidence.push('broad exploration occurred after the first Madar call')
+    return {
+      status: 'not_measured',
+      evidence: ['broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it'],
+    }
   }
   const directives = new Set(report.madar_trace.agent_directive_seen ?? [])
   if (

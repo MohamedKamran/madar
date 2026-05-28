@@ -136,11 +136,18 @@ function scopeQualityAssessment(
         if (segments.length === 0) {
           return ''
         }
+        const genericIndex = segments.findIndex((segment) => GENERIC_SCOPE_SEGMENTS.has(segment.toLowerCase()))
+        if (genericIndex > 0) {
+          const candidate = segments[genericIndex - 1]
+          if (candidate && !/^[A-Za-z]:$/.test(candidate)) {
+            return candidate
+          }
+        }
         const [firstSegment, secondSegment] = segments
         if (segments.length > 1 && firstSegment && secondSegment && GENERIC_SCOPE_WRAPPERS.has(firstSegment.toLowerCase())) {
           return secondSegment
         }
-        return firstSegment ?? ''
+        return /^[A-Za-z]:$/.test(firstSegment ?? '') ? (secondSegment ?? '') : (firstSegment ?? '')
       })
       .filter((value): value is string => value.length > 0 && !GENERIC_SCOPE_SEGMENTS.has(value.toLowerCase())),
   )]

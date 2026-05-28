@@ -128,6 +128,65 @@ describe('mcp-response-evidence', () => {
     )
   })
 
+  it('derives scope quality from absolute workflow-owner paths', () => {
+    const evidence = buildMadarResponseEvidence({
+      graphPath: 'C:/repo/backend/out/graph.json',
+      coverage: {
+        required_evidence: ['primary', 'supporting', 'structural'],
+        semantic_required: ['implementation', 'structure'],
+        semantic_optional: ['tests'],
+        entries: [
+          { evidence_class: 'primary', required: true, available_nodes: 1, selected_nodes: 1, status: 'covered' },
+          { evidence_class: 'supporting', required: true, available_nodes: 1, selected_nodes: 1, status: 'covered' },
+          { evidence_class: 'structural', required: true, available_nodes: 1, selected_nodes: 1, status: 'covered' },
+        ],
+        semantic_entries: [
+          { category: 'implementation', label: 'implementation', required: true, available_nodes: 1, selected_nodes: 1, status: 'covered' },
+          { category: 'structure', label: 'structure', required: true, available_nodes: 1, selected_nodes: 1, status: 'covered' },
+          { category: 'tests', label: 'tests', required: false, available_nodes: 0, selected_nodes: 0, status: 'missing' },
+        ],
+        missing_required: [],
+        missing_semantic: [],
+        available_relationships: 1,
+        selected_relationships: 1,
+      },
+      coveredWorkflowOwners: ['C:\\repo\\backend\\src\\spi\\runtime.ts'],
+      executionSlice: {
+        status: 'complete',
+        confidence: 'high',
+        confidence_reasons: [],
+        steps: [
+          {
+            node_id: 'runtime_entry',
+            label: 'RuntimeSpi.execute',
+            source_file: 'C:\\repo\\backend\\src\\spi\\runtime.ts',
+            line_number: 10,
+            node_kind: 'method',
+          },
+        ],
+        phase_coverage: {
+          expected: ['controller', 'service', 'persistence'],
+          observed: ['controller', 'service', 'persistence'],
+          missing: [],
+        },
+      },
+      answerContract: {
+        version: 1,
+        answer_focus: 'runtime_generation',
+        entrypoint_scope: 'setup_context',
+        required_elements: ['main_pipeline_phases'],
+        do_not_claim: [],
+        observed_phases: ['controller', 'service', 'persistence'],
+        missing_phases: [],
+        confidence: 'high',
+      },
+    })
+
+    expect(evidence.confidence_reasons).toContain(
+      'scope quality: graph scope is aligned with the backend runtime evidence',
+    )
+  })
+
   it('does not mark runtime-generation answers as contained when no execution slice exists', () => {
     const evidence = buildMadarResponseEvidence({
       graphPath: 'backend/out/graph.json',

@@ -1283,6 +1283,43 @@ describe('executeNativeAgentCompare', () => {
     }
   })
 
+  it('marks prompt-contract evidence after post-pack broad exploration as not measured', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({
+            baseline: VERBOSE_BASELINE_PAYLOAD,
+            madar: VERBOSE_MADAR_MCP_RETRIEVE_WITH_FOLLOWUP_EXPLORATION_PAYLOAD,
+          }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.prompt_contract).toEqual({
+        status: 'not_measured',
+        evidence: [
+          'broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it',
+        ],
+      })
+
+      const summary = formatNativeAgentCompareSummary(result)
+      expect(summary).toContain(
+        'prompt_contract: not_measured (broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it)',
+      )
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
   it('distinguishes Madar-first bounded traces from generic Madar invocation', async () => {
     const { projectDir, graphPath, outputDir } = makeFixtureProject()
     try {
@@ -1873,7 +1910,7 @@ describe('executeNativeAgentCompare', () => {
           },
         ).then((result) => ({ kind: 'resolved' as const, result })),
         new Promise<{ kind: 'hung' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'hung' }), 100)
+          setTimeout(() => resolve({ kind: 'hung' }), 1000)
         }),
       ])
 
@@ -1899,6 +1936,55 @@ describe('executeNativeAgentCompare', () => {
         arm: 'madar',
       }))
       expect(readFileSync(report.paths.baseline_answer, 'utf8')).toContain('baseline answer')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('waits for an aborted madar arm to settle before resolving the timeout outcome', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      let abortedRunnerSettled = false
+      const request = {
+        graphPath,
+        question: 'stalled madar arm with abort cleanup',
+        outputDir,
+        execTemplate: 'mock-runner',
+        baselineMode: 'native_agent',
+        perArmTimeoutSeconds: 0.01,
+      } as Parameters<typeof executeNativeAgentCompare>[0] & { perArmTimeoutSeconds: number }
+
+      const stalledRunner: NativeAgentRunner = async (input) => {
+        if (input.mode === 'baseline') {
+          return {
+            exitCode: 0,
+            stdout: `${JSON.stringify(BASELINE_USAGE_PAYLOAD)}\n`,
+            stderr: '',
+            elapsedMs: 10,
+          }
+        }
+        return await new Promise((_, reject) => {
+          input.signal!.addEventListener('abort', () => {
+            setTimeout(() => {
+              abortedRunnerSettled = true
+              reject(new Error('aborted after cleanup'))
+            }, 50)
+          }, { once: true })
+        })
+      }
+
+      const result = await executeNativeAgentCompare(
+        request,
+        {
+          runner: stalledRunner,
+          now: () => new Date('2026-05-28T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(abortedRunnerSettled).toBe(true)
+      expect(report.madar.kind).toBe('runner_error')
+      expect((report.madar as { failure_reason?: unknown }).failure_reason).toBe('timed_out')
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }
@@ -1939,7 +2025,7 @@ describe('executeNativeAgentCompare', () => {
           },
         ).then((result) => ({ kind: 'resolved' as const, result })),
         new Promise<{ kind: 'hung' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'hung' }), 100)
+          setTimeout(() => resolve({ kind: 'hung' }), 1000)
         }),
       ])
 

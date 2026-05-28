@@ -4546,6 +4546,57 @@ describe('assessBenchmarkReadinessFromRetrieveResult', () => {
     expect(readiness.suggested_graph_scope).toBe('backend/out/graph.json')
   })
 
+  it('normalizes absolute source_file paths before suggesting a scoped backend graph', () => {
+    const readiness = assessBenchmarkReadinessFromRetrieveResult({
+      graphPath: '/repo/out/graph.json',
+      retrieval: makeRuntimeGenerationRetrieval({
+        matched_nodes: [
+          {
+            label: 'IdeaReportSpi.generate',
+            source_file: '/repo/backend/src/spi/idea-report.spi.ts',
+            line_number: 12,
+            file_type: 'code',
+            snippet: null,
+            match_score: 11,
+            relevance_band: 'direct',
+            community: null,
+            community_label: null,
+          },
+        ],
+        execution_slice: {
+          status: 'partial',
+          confidence: 'medium',
+          confidence_reasons: ['persistence_boundary_not_traced'],
+          steps: [
+            {
+              label: 'IdeaReportSpi.generate',
+              source_file: '/repo/backend/src/spi/idea-report.spi.ts',
+              line_number: 12,
+              node_kind: 'method',
+            },
+          ],
+          phase_coverage: {
+            expected: ['planner', 'report_builder', 'scoring', 'renderer_or_synthesis', 'persistence'],
+            observed: ['planner', 'report_builder', 'scoring', 'renderer_or_synthesis'],
+            missing: ['persistence'],
+          },
+        },
+        answer_contract: {
+          version: 1,
+          answer_focus: 'runtime_generation',
+          entrypoint_scope: 'setup_context',
+          required_elements: ['main_pipeline_phases'],
+          do_not_claim: [],
+          observed_phases: ['planner', 'report_builder', 'scoring', 'renderer_or_synthesis'],
+          missing_phases: ['persistence'],
+          confidence: 'medium',
+        },
+      }),
+    })
+
+    expect(readiness.suggested_graph_scope).toBe('backend/out/graph.json')
+  })
+
   it('marks backend SPI runtime-generation packs ready when runtime spine evidence is covered', () => {
     const readiness = assessBenchmarkReadinessFromRetrieveResult({
       graphPath: '/repo/backend/out/graph.json',
