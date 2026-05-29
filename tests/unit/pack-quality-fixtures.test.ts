@@ -152,7 +152,14 @@ describe('pack-quality fixtures (#298)', () => {
       missing: [],
     }))
     expect(payload.pack?.matched_nodes?.length).toBeLessThanOrEqual(8)
-    expect(payload.pack?.matched_nodes?.map((entry) => entry.label)).toEqual(
+    const surfacedLabels = new Set([
+      ...(payload.pack?.matched_nodes?.map((entry) => entry.label).filter((label): label is string => typeof label === 'string') ?? []),
+      ...(payload.expandable?.flatMap((entry) =>
+        entry.preview?.map((node) => node.label).filter((label): label is string => typeof label === 'string') ?? [],
+      ) ?? []),
+      ...(payload.claims?.flatMap((entry) => entry.node_labels ?? []) ?? []),
+    ])
+    expect([...surfacedLabels]).toEqual(
       expect.arrayContaining([
         '.generateFromProblem()',
         '.buildQueuedIdeaReportResponse()',

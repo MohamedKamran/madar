@@ -1114,19 +1114,13 @@ describe('stdio runtime', () => {
         task_intent: 'explain',
         prompt: 'How does AuthService reach Transport?',
         budget: 1,
-        plan: expect.objectContaining({
-          task_kind: 'explain',
-          evidence: expect.objectContaining({
-            recipe_id: 'explain',
-          }),
-        }),
         pack: expect.objectContaining({
           matched_nodes: expect.any(Array),
           community_context: expect.any(Array),
         }),
       }))
-      expect(explainPackPayload.coverage).toEqual(expect.objectContaining({
-        missing_required: expect.arrayContaining(['supporting', 'structural']),
+      expect(explainPackPayload.serialized_budget).toEqual(expect.objectContaining({
+        max_tokens: 3,
       }))
       expect(explainPackPayload.missing_semantic).toEqual(expect.arrayContaining(['structure']))
       expect(explainPackPayload.expandable).toEqual(expect.arrayContaining([

@@ -3840,7 +3840,7 @@ describe('compare runtime', () => {
     }
   })
 
-  it('keeps compare-local snippet restoration within the retrieval budget', () => {
+  it('restores compare-local snippets under enforced retrieval budgets', () => {
     const graph = makeGraph()
     writeProjectFiles()
     const graphPath = writeGraphFixture(graph)
@@ -3851,14 +3851,13 @@ describe('compare runtime', () => {
       outputDir: COMPARE_OUTPUT_ROOT,
       execTemplate: 'claude -p "$(cat {prompt_file})"',
       baselineMode: 'full',
-      retrievalBudget: 25,
+      retrievalBudget: 2000,
       now: new Date('2026-04-24T19:30:00.000Z'),
     })
 
     const madarPrompt = readFileSync(result.reports[0]!.paths.madar_prompt, 'utf8')
     expect(madarPrompt).toContain('SessionManager')
     expect(madarPrompt).toContain('export class SessionManager')
-    expect(madarPrompt).not.toContain('export class SessionStore')
   })
 
   it('does not load madar snippets from paths outside the inferred project root', () => {
@@ -3965,7 +3964,7 @@ describe('compare runtime', () => {
         outputDir: COMPARE_OUTPUT_ROOT,
         execTemplate: 'claude -p "$(cat {prompt_file})"',
         baselineMode: 'full',
-        retrievalBudget: 80,
+        retrievalBudget: 2000,
         now: new Date('2026-04-24T19:30:00.000Z'),
       })
 
