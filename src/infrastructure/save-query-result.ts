@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export interface SaveQueryOptions {
@@ -28,17 +28,32 @@ function questionSlug(question: string): string {
   )
 }
 
-function ensureUniquePath(directory: string, fileName: string): string {
-  let candidate = join(directory, fileName)
-  let counter = 1
-  while (existsSync(candidate)) {
-    const extensionIndex = fileName.lastIndexOf('.')
-    const stem = extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName
-    const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : ''
-    candidate = join(directory, `${stem}_${counter}${extension}`)
-    counter += 1
+function buildCandidatePath(directory: string, fileName: string, counter: number): string {
+  if (counter === 0) {
+    return join(directory, fileName)
   }
-  return candidate
+
+  const extensionIndex = fileName.lastIndexOf('.')
+  const stem = extensionIndex >= 0 ? fileName.slice(0, extensionIndex) : fileName
+  const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : ''
+  return join(directory, `${stem}_${counter}${extension}`)
+}
+
+function writeUniqueFile(directory: string, fileName: string, content: string): string {
+  for (let counter = 0; counter < 10_000; counter += 1) {
+    const candidate = buildCandidatePath(directory, fileName, counter)
+    try {
+      writeFileSync(candidate, content, { encoding: 'utf8', flag: 'wx' })
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        continue
+      }
+      throw error
+    }
+  }
+
+  throw new Error(`Unable to allocate a unique query result path inside ${directory}`)
 }
 
 export function saveQueryResult(question: string, answer: string, memoryDir: string, options: SaveQueryOptions = {}): string {
@@ -46,7 +61,7 @@ export function saveQueryResult(question: string, answer: string, memoryDir: str
   mkdirSync(directory, { recursive: true })
 
   const now = new Date()
-  const outputPath = ensureUniquePath(directory, `query_${timestampSlug(now)}_${questionSlug(question)}.md`)
+  const fileName = `query_${timestampSlug(now)}_${questionSlug(question)}.md`
   const sourceNodes = options.sourceNodes?.slice(0, MAX_SOURCE_NODES) ?? []
   const lines = [
     '---',
@@ -71,6 +86,6 @@ export function saveQueryResult(question: string, answer: string, memoryDir: str
     }
   }
 
-  writeFileSync(outputPath, `${lines.join('\n')}\n`, 'utf8')
+  const outputPath = writeUniqueFile(directory, fileName, `${lines.join('\n')}\n`)
   return outputPath
 }

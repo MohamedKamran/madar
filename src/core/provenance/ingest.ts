@@ -8,6 +8,7 @@ const TWEET_HOSTS = new Set(['twitter.com', 'www.twitter.com', 'mobile.twitter.c
 const REDDIT_HOSTS = new Set(['reddit.com', 'www.reddit.com', 'old.reddit.com', 'm.reddit.com', 'redd.it'])
 const HACKER_NEWS_HOSTS = new Set(['news.ycombinator.com'])
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'])
+const ARXIV_HOSTS = new Set(['arxiv.org', 'www.arxiv.org'])
 const IMAGE_EXTENSIONS = ['.gif', '.jpeg', '.jpg', '.png', '.svg', '.webp']
 const AUDIO_EXTENSIONS = ['.aac', '.flac', '.m4a', '.mp3', '.ogg', '.opus', '.wav']
 const VIDEO_EXTENSIONS = ['.avi', '.m4v', '.mkv', '.mov', '.mp4', '.webm']
@@ -87,6 +88,11 @@ function isHackerNewsItemUrl(parsed: URL): boolean {
   return HACKER_NEWS_HOSTS.has(parsed.hostname.toLowerCase()) && parsed.pathname === '/item' && isDigits(parsed.searchParams.get('id')?.trim() ?? '')
 }
 
+function isArxivContentUrl(parsed: URL): boolean {
+  const hostname = parsed.hostname.toLowerCase()
+  return ARXIV_HOSTS.has(hostname) || hostname.endsWith('.arxiv.org')
+}
+
 function isYouTubeContentUrl(parsed: URL): boolean {
   const hostname = parsed.hostname.toLowerCase()
   if (!YOUTUBE_HOSTS.has(hostname)) {
@@ -121,7 +127,6 @@ function isYouTubeContentUrl(parsed: URL): boolean {
 function detectLegacyIngestUrlType(url: string): LegacyIngestUrlType {
   const parsed = new URL(url)
   const hostname = parsed.hostname.toLowerCase()
-  const lower = url.toLowerCase()
 
   if (isTweetPostUrl(parsed)) {
     return 'tweet'
@@ -132,7 +137,7 @@ function detectLegacyIngestUrlType(url: string): LegacyIngestUrlType {
   if (isHackerNewsItemUrl(parsed)) {
     return 'hackernews'
   }
-  if (lower.includes('arxiv.org')) {
+  if (isArxivContentUrl(parsed)) {
     return 'arxiv'
   }
   if (hostname === 'github.com' || hostname === 'www.github.com') {
