@@ -1250,6 +1250,38 @@ describe('executeNativeAgentCompare', () => {
     }
   })
 
+  it('preserves a full-profile first-tool violation even when broad exploration happens later', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject({ profile: 'full' })
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'What is the cluster module?',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({
+            baseline: VERBOSE_BASELINE_PAYLOAD,
+            madar: VERBOSE_MADAR_MCP_RETRIEVE_WITH_FOLLOWUP_EXPLORATION_PAYLOAD,
+          }),
+          now: () => new Date('2026-05-01T00:00:00Z'),
+        },
+      )
+
+      expect((result.reports[0] as NativeAgentCompareReport).prompt_contract).toEqual({
+        status: 'violated',
+        evidence: [
+          'first Madar call was not context_pack',
+          'broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it',
+        ],
+      })
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
   it('recognizes the real Claude installer hook as a verified Madar install', async () => {
     const { projectDir, graphPath, outputDir } = makeFixtureProject({ installState: 'managed' })
     try {

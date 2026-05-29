@@ -3578,6 +3578,13 @@ function assessNativeAgentPromptContract(
     evidence.push('broad exploration occurred before the first Madar call')
   }
   if (report.madar_trace.broad_exploration_tool_call_count > 0) {
+    if (evidence.length > 0) {
+      evidence.push('broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it')
+      return {
+        status: 'violated',
+        evidence,
+      }
+    }
     return {
       status: 'not_measured',
       evidence: ['broad exploration occurred after the first Madar call, but the trace does not show whether missing_context justified it'],
