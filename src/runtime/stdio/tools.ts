@@ -141,7 +141,7 @@ interface CachedExplainContextPackPayload extends Record<string, unknown> {
   task: 'explain'
   prompt: string
   task_intent: TaskContextPlan['evidence']['recipe_id']
-  expandable: ContextPackExpandableRef[]
+  expandable?: ContextPackExpandableRef[]
 }
 
 function isStoredContextPackHandle(value: unknown): value is StoredContextPackHandle {
@@ -168,7 +168,13 @@ function isStoredContextPackHandle(value: unknown): value is StoredContextPackHa
     && isContextPackTaskKind(followUp.task_kind)
     && typeof followUp.evidence_class === 'string'
     && Array.isArray(followUp.focus_files)
-    && Array.isArray(followUp.focus_ranges)
+    && (
+      !Object.hasOwn(followUp, 'focus_ranges')
+      || (
+        Array.isArray(followUp.focus_ranges)
+        && followUp.focus_ranges.every((entry) => isExpandableSourceRange(entry))
+      )
+    )
 }
 
 function parseRetrievalStrategyParam(
@@ -219,8 +225,13 @@ function isContextPackExpandableFollowUp(value: unknown): value is ContextPackEx
     && isContextPackEvidenceClass(candidate.evidence_class)
     && Array.isArray(candidate.focus_files)
     && candidate.focus_files.every((entry) => typeof entry === 'string')
-    && Array.isArray(candidate.focus_ranges)
-    && candidate.focus_ranges.every((entry) => isExpandableSourceRange(entry))
+    && (
+      !Object.hasOwn(candidate, 'focus_ranges')
+      || (
+        Array.isArray(candidate.focus_ranges)
+        && candidate.focus_ranges.every((entry) => isExpandableSourceRange(entry))
+      )
+    )
 }
 
 function isContextPackExpandableRef(value: unknown): value is ContextPackExpandableRef {
@@ -246,8 +257,7 @@ function isCachedExplainContextPackPayload(value: unknown): value is CachedExpla
   return candidate.task === 'explain'
     && typeof candidate.prompt === 'string'
     && typeof candidate.task_intent === 'string'
-    && Array.isArray(candidate.expandable)
-    && candidate.expandable.every((entry) => isContextPackExpandableRef(entry))
+    && (!Object.hasOwn(candidate, 'expandable') || Array.isArray(candidate.expandable))
 }
 
 function parseContextPackResolution(raw: string | null): ContextPackResolution {
@@ -633,7 +643,10 @@ function storeExpandableHandles(
       prompt,
       task,
       task_intent: taskIntent,
-      follow_up: entry.follow_up,
+      follow_up: {
+        ...entry.follow_up,
+        focus_ranges: entry.follow_up.focus_ranges ?? [],
+      },
     } satisfies StoredContextPackHandle)
   }
 }
@@ -653,7 +666,7 @@ function buildFocusedExpansionPayload(
     ...helpers.readStoredCommunityLabels(graphPath),
   }
   const focusFiles = stored.follow_up.focus_files
-  const focusRanges = stored.follow_up.focus_ranges
+  const focusRanges = stored.follow_up.focus_ranges ?? []
   const nodeCandidates: Array<ContextPackNodeCandidate<ContextPackNode>> = []
   const communityIds = new Set<number>()
   const includedIds = new Set<string>()
@@ -1151,7 +1164,7 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
               cachedPayload.prompt,
               'explain',
               cachedPayload.task_intent,
-              cachedPayload.expandable,
+              cachedPayload.expandable ?? [],
               helpers,
             )
             return helpers.ok(id, helpers.textToolResult(JSON.stringify(withContextPackCache(cachedPayload, {
@@ -1354,7 +1367,7 @@ export function handleToolCall(id: string | number | null, graphPath: string, pa
         }),
       }
       const responsePayload = task === 'explain' && !includeSelectionDiagnostics
-        ? buildAnswerReadyPackSchema(basePayload, Math.max(plannerBudget, 3000))
+        ? buildAnswerReadyPackSchema(basePayload, resolvedBudget, fullPack.selection_diagnostics)
         : basePayload
       if (!cacheKey || !cacheGraphVersion) {
         return helpers.ok(id, helpers.textToolResult(JSON.stringify(responsePayload)))

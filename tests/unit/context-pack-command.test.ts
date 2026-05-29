@@ -4,8 +4,9 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { ContextPackSelectionDiagnostics } from '../../src/contracts/context-pack.js'
 import { KnowledgeGraph } from '../../src/contracts/graph.js'
-import { runContextPackCommand, type ContextPackCommandDependencies } from '../../src/infrastructure/context-pack-command.js'
+import { buildAnswerReadyPackSchema, runContextPackCommand, type ContextPackCommandDependencies } from '../../src/infrastructure/context-pack-command.js'
 import { build } from '../../src/pipeline/build.js'
 import { compactRetrieveResult, retrieveContext, type RetrieveResult } from '../../src/runtime/retrieve.js'
 import { estimateQueryTokens } from '../../src/runtime/serve.js'
@@ -137,6 +138,159 @@ function buildImplementationPackDistractorGraph() {
   )
   graph.graph.root_path = root
   return graph
+}
+
+function buildOversizedAnswerReadySchema() {
+  const repeatedSnippet = (name: string, repeat: number) => Array.from(
+    { length: repeat },
+    (_, index) => `function ${name}_${index}() { return "${name}-${index}"; }`,
+  ).join('\n')
+
+  return {
+    schema_version: 1,
+    task: 'explain',
+    prompt: 'Explain how the runtime pipeline works',
+    budget: 1500,
+    graph_path: 'out/graph.json',
+    evidence: {
+      pack_confidence: 'high' as const,
+      coverage: 'complete' as const,
+      missing_phases: [],
+      covered_workflow_owners: ['src/runtime/controller.ts', 'src/runtime/service.ts'],
+      confidence_reasons: ['all required evidence covered'],
+      agent_directive: 'answer_from_pack' as const,
+    },
+    workflow_centers: [
+      { label: 'RuntimeController.handle', path: 'src/runtime/controller.ts', reason: 'controller entrypoint' },
+      { label: 'RuntimeService.execute', path: 'src/runtime/service.ts', reason: 'service handoff' },
+    ],
+    recommended_first_read: [
+      { label: 'RuntimeController.handle', path: 'src/runtime/controller.ts', reason: 'entrypoint' },
+    ],
+    pack: {
+      answer_contract: {
+        version: 1,
+        answer_focus: 'runtime_generation',
+        entrypoint_scope: 'setup_context',
+        required_elements: ['main_pipeline_phases'],
+        do_not_claim: ['unverified_background_jobs'],
+        observed_phases: ['controller', 'service'],
+        missing_phases: [],
+        confidence: 'high',
+      },
+      matched_nodes: [
+        {
+          node_id: 'workflow-controller',
+          label: 'RuntimeController.handle',
+          source_file: 'src/runtime/controller.ts',
+          line_number: 10,
+          snippet: repeatedSnippet('controller', 24),
+        },
+        {
+          node_id: 'workflow-service',
+          label: 'RuntimeService.execute',
+          source_file: 'src/runtime/service.ts',
+          line_number: 30,
+          snippet: repeatedSnippet('service', 24),
+        },
+        {
+          node_id: 'helper-low-1',
+          label: 'StatusFormatter.render',
+          source_file: 'src/runtime/status.ts',
+          line_number: 50,
+          snippet: repeatedSnippet('status', 22),
+        },
+        {
+          node_id: 'helper-low-2',
+          label: 'AuditLogger.enqueue',
+          source_file: 'src/runtime/audit.ts',
+          line_number: 70,
+          snippet: repeatedSnippet('audit', 22),
+        },
+      ],
+      relationships: [
+        { from_id: 'workflow-controller', from: 'RuntimeController.handle', to_id: 'workflow-service', to: 'RuntimeService.execute', relation: 'calls' },
+        { from_id: 'workflow-service', from: 'RuntimeService.execute', to_id: 'helper-low-1', to: 'StatusFormatter.render', relation: 'calls' },
+        { from_id: 'workflow-service', from: 'RuntimeService.execute', to_id: 'helper-low-2', to: 'AuditLogger.enqueue', relation: 'calls' },
+      ],
+    },
+    expandable: [
+      {
+        kind: 'more_matches',
+        reason: 'additional supporting nodes',
+        preview: [
+          { node_id: 'helper-low-1', label: 'StatusFormatter.render', source_file: 'src/runtime/status.ts' },
+          { node_id: 'helper-low-2', label: 'AuditLogger.enqueue', source_file: 'src/runtime/audit.ts' },
+        ],
+        follow_up: {
+          focus_ranges: Array.from({ length: 16 }, (_, index) => ({
+            source_file: `src/runtime/focus-${index}.ts`,
+            start_line: index + 1,
+            end_line: index + 12,
+            reason: 'secondary detail',
+          })),
+        },
+      },
+    ],
+    routing: {
+      warnings: [],
+    },
+  }
+}
+
+function buildAnswerReadySelectionDiagnostics(): ContextPackSelectionDiagnostics {
+  return {
+    selection_strategy: 'value-per-token',
+    budget: 1500,
+    used_tokens: 1400,
+    required_overflow: false,
+    ranking: [
+      {
+        id: 'workflow-controller',
+        label: 'RuntimeController.handle',
+        evidence_class: 'primary',
+        score: 0.99,
+        token_cost: 220,
+        density: 1.2,
+        included: true,
+        reasons: ['entrypoint'],
+        penalties: [],
+      },
+      {
+        id: 'workflow-service',
+        label: 'RuntimeService.execute',
+        evidence_class: 'supporting',
+        score: 0.96,
+        token_cost: 220,
+        density: 1.1,
+        included: true,
+        reasons: ['handoff'],
+        penalties: [],
+      },
+      {
+        id: 'helper-low-1',
+        label: 'StatusFormatter.render',
+        evidence_class: 'supporting',
+        score: 0.52,
+        token_cost: 240,
+        density: 0.12,
+        included: true,
+        reasons: ['secondary formatting detail'],
+        penalties: ['low load-bearing value'],
+      },
+      {
+        id: 'helper-low-2',
+        label: 'AuditLogger.enqueue',
+        evidence_class: 'supporting',
+        score: 0.48,
+        token_cost: 240,
+        density: 0.08,
+        included: true,
+        reasons: ['secondary audit detail'],
+        penalties: ['low load-bearing value'],
+      },
+    ],
+  }
 }
 
 describe('context-pack-command', () => {
@@ -635,6 +789,85 @@ describe('context-pack-command', () => {
       'src/ideas/controller.ts',
       'src/ideas/report-service.ts',
     ])
+  })
+
+  it('culls oversized answer-ready explain payloads to budget using ranking order and records the dropped nodes', () => {
+    const payload = buildAnswerReadyPackSchema(
+      buildOversizedAnswerReadySchema(),
+      1500,
+      buildAnswerReadySelectionDiagnostics(),
+    ) as {
+      serialized_budget?: { max_tokens?: number; token_count?: number; enforced?: boolean }
+      workflow_centers?: Array<{ label?: string }>
+      recommended_first_read?: Array<{ path?: string }>
+      pack?: {
+        answer_contract?: { required_elements?: string[] }
+        matched_nodes?: Array<{ node_id?: string }>
+        relationships?: Array<{ to_id?: string }>
+      }
+      routing?: {
+        warnings?: Array<{ kind?: string; detail?: { dropped_node_ids?: string[] } }>
+      }
+    }
+    const droppedNodeIds = payload.routing?.warnings
+      ?.find((entry) => entry.kind === 'pack_culled_to_budget')
+      ?.detail?.dropped_node_ids ?? []
+
+    expect(payload.serialized_budget).toEqual(expect.objectContaining({
+      max_tokens: 1500,
+      enforced: true,
+    }))
+    expect(payload.serialized_budget?.token_count).toBeLessThanOrEqual(1500)
+    expect(payload.workflow_centers?.map((entry) => entry.label)).toEqual([
+      'RuntimeController.handle',
+      'RuntimeService.execute',
+    ])
+    expect(payload.recommended_first_read?.map((entry) => entry.path)).toEqual([
+      'src/runtime/controller.ts',
+    ])
+    expect(payload.pack?.answer_contract?.required_elements).toEqual(['main_pipeline_phases'])
+    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).toContain('helper-low-1')
+    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).not.toContain('helper-low-2')
+    expect(droppedNodeIds).toContain('helper-low-2')
+    expect(droppedNodeIds).not.toContain('helper-low-1')
+    expect(payload.routing?.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'pack_culled_to_budget',
+        detail: expect.objectContaining({
+          dropped_node_ids: expect.arrayContaining(['helper-low-2']),
+        }),
+      }),
+    ]))
+  })
+
+  it('downgrades pack confidence when budget culling must drop workflow-spine nodes', () => {
+    const payload = buildAnswerReadyPackSchema(
+      buildOversizedAnswerReadySchema(),
+      850,
+      buildAnswerReadySelectionDiagnostics(),
+    ) as {
+      serialized_budget?: { token_count?: number; enforced?: boolean }
+      evidence?: {
+        pack_confidence?: string
+        agent_directive?: string
+        confidence_reasons?: string[]
+      }
+      pack?: {
+        matched_nodes?: Array<{ node_id?: string }>
+      }
+    }
+
+    expect(payload.serialized_budget?.enforced).toBe(true)
+    expect(payload.serialized_budget?.token_count).toBeLessThanOrEqual(850)
+    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).not.toEqual(expect.arrayContaining([
+      'workflow-controller',
+      'workflow-service',
+    ]))
+    expect(payload.evidence).toEqual(expect.objectContaining({
+      pack_confidence: 'low',
+      agent_directive: 'explore_with_caution',
+      confidence_reasons: expect.arrayContaining(['budget too tight for workflow spine']),
+    }))
   })
 
   it('keeps debug-heavy path details when pack verbose mode is explicitly requested', async () => {
