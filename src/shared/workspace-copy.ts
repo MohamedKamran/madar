@@ -5,6 +5,8 @@ export interface CopyWorkspaceOptions {
   sharedTopLevelEntries?: readonly string[]
 }
 
+const FILTERED_TOP_LEVEL_ENTRIES = ['out', '.git'] as const
+
 function filterWorkspaceCopy(sourceRoot: string, sourcePath: string, sharedTopLevelEntries: ReadonlySet<string>): boolean {
   const relativePath = relative(sourceRoot, sourcePath)
   if (sharedTopLevelEntries.size > 0) {
@@ -45,6 +47,12 @@ function linkSharedTopLevelEntries(
   }
 }
 
+function removeFilteredTopLevelEntries(targetRoot: string): void {
+  for (const entry of FILTERED_TOP_LEVEL_ENTRIES) {
+    rmSync(join(targetRoot, entry), { recursive: true, force: true })
+  }
+}
+
 export function copyWorkspaceForBenchmark(sourceRoot: string, targetRoot: string, options: CopyWorkspaceOptions = {}): void {
   const sharedTopLevelEntries = options.sharedTopLevelEntries ?? []
   const sharedTopLevelEntrySet = new Set(sharedTopLevelEntries)
@@ -53,5 +61,6 @@ export function copyWorkspaceForBenchmark(sourceRoot: string, targetRoot: string
     recursive: true,
     filter: (sourcePath) => filterWorkspaceCopy(sourceRoot, sourcePath, sharedTopLevelEntrySet),
   })
+  removeFilteredTopLevelEntries(targetRoot)
   linkSharedTopLevelEntries(sourceRoot, targetRoot, sharedTopLevelEntries)
 }
