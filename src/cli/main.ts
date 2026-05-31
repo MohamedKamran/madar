@@ -6,6 +6,7 @@ import { runBenchmarkSuite } from '../infrastructure/benchmark/suite.js'
 import { evaluateRetrievalQuality, formatQualityReport } from '../infrastructure/benchmark/quality.js'
 import { BenchmarkReadinessError, NativeAgentInstallRequiredError, runCompareCommand } from '../infrastructure/compare.js'
 import { runContextPackCommand } from '../infrastructure/context-pack-command.js'
+import { runHandoffCommand } from '../infrastructure/handoff-command.js'
 import { runContextPromptCommand } from '../infrastructure/context-prompt-command.js'
 import { runDoctorCommand, runStatusCommand } from '../infrastructure/doctor.js'
 import { runReviewCompareCommand } from '../infrastructure/review-compare.js'
@@ -49,6 +50,7 @@ import {
   type BenchmarkCliOptions,
   parseCompareArgs,
   parseDoctorArgs,
+  parseHandoffArgs,
   parsePackArgs,
   parseDiffArgs,
   parseExplainArgs,
@@ -64,6 +66,7 @@ import {
   parseSummaryArgs,
   parseServeArgs,
   parseTimeTravelArgs,
+  type HandoffCliOptions,
   type PackCliOptions,
   type PromptCliOptions,
   parseWatchArgs,
@@ -115,6 +118,11 @@ export interface ContextPackCommandContext {
   io: CliIO
 }
 
+export interface HandoffCommandContext {
+  options: HandoffCliOptions
+  io: CliIO
+}
+
 export interface ContextPromptCommandContext {
   options: PromptCliOptions
   io: CliIO
@@ -132,6 +140,7 @@ export interface CliDependencies {
   runReviewCompare: (context: ReviewCompareCommandContext) => Promise<string | void> | string | void
   runTimeTravel: (context: TimeTravelCommandContext) => Promise<string | void> | string | void
   runContextPack: (context: ContextPackCommandContext) => Promise<string | void> | string | void
+  runHandoff: (context: HandoffCommandContext) => Promise<string | void> | string | void
   runContextPrompt: (context: ContextPromptCommandContext) => Promise<string | void> | string | void
   runDoctor: (graphPath: string) => string
   runStatus: (graphPath: string) => string
@@ -232,6 +241,9 @@ const DEFAULT_DEPENDENCIES: CliDependencies = {
   },
   runContextPack: async ({ options }) => {
     return await runContextPackCommand(options)
+  },
+  runHandoff: async ({ options }) => {
+    return await runHandoffCommand(options)
   },
   runContextPrompt: async ({ options }) => {
     return await runContextPromptCommand(options)
@@ -374,6 +386,12 @@ export function formatHelp(binaryName = 'madar'): string {
     '    --graph <path>       path to graph.json (default out/graph.json)',
     '    --format MODE       json|text|markdown|claude|copilot (default json)',
     '    --why               include retrieval-routing debug metadata in the pack output',
+    '  handoff "<prompt>"    emit a portable remote-agent handoff artifact',
+    '    --budget N            cap handoff assembly at N tokens (default 3000)',
+    '    --task KIND          explain|implement|review|impact (default explain)',
+    '    --graph <path>       path to graph.json (default out/graph.json)',
+    '    --consumer NAME      generic|codex|cursor|copilot (default generic)',
+    '    --allow-snippets     include raw snippets and mark the artifact non-share-safe',
     '  prompt "<prompt>"     compile a provider-ready prompt payload',
     '    --provider NAME      claude|gemini',
     '    --graph <path>       path to graph.json (default out/graph.json)',
@@ -691,6 +709,15 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
     if (command === 'pack') {
       const options = parsePackArgs(args)
       const output = await dependencies.runContextPack({ options, io })
+      if (output !== undefined) {
+        io.log(output)
+      }
+      return 0
+    }
+
+    if (command === 'handoff') {
+      const options = parseHandoffArgs(args)
+      const output = await dependencies.runHandoff({ options, io })
       if (output !== undefined) {
         io.log(output)
       }
