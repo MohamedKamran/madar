@@ -1404,8 +1404,9 @@ describe('runBenchmarkSuite', () => {
 
       const shareSafePath = result.summary?.cells[0]?.artifacts.legacy_share_safe_reports[0]
       expect(shareSafePath).toBeTruthy()
-      expect(shareSafePath).toContain('/trial-001/report.share-safe.json')
-      expect(shareSafePath).not.toContain('/trial-001/trial-001/')
+      const normalizedShareSafePath = shareSafePath!.replaceAll('\\', '/')
+      expect(normalizedShareSafePath).toContain('/trial-001/report.share-safe.json')
+      expect(normalizedShareSafePath).not.toContain('/trial-001/trial-001/')
 
       const publishedReportPath = resolve(
         process.cwd(),
