@@ -1,0 +1,11 @@
+Baseline answer fixture
+Model: claude-sonnet
+Prompt: How does login session creation flow work from controller to persistence?
+Temperature: n/a
+Repo: nestjs-mid
+Task: explain-runtime
+Trial: 3
+Arm: spi
+
+Summary: Baseline sample output for nestjs-mid/explain-runtime showing the published fixture format.
+Evidence note: deterministic baseline receipt for suite matrix serialization checks.

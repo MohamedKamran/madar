@@ -16,7 +16,7 @@ This file is the public map between what Madar says and what the repo can actual
 
 | Claim | Current status | Next evidence |
 | --- | --- | --- |
-| Public benchmark claims should hold up as per-repo receipts instead of a single headline number. | The repo ships the methodology, manifests, isolation assets, and `madar bench:suite` runner under [`docs/benchmarks/suite/`](docs/benchmarks/suite/README.md), but the populated matrix is still small. | Add more measured rows under `docs/benchmarks/suite/results/` and keep each row tied to its repo/task cell. |
+| Public benchmark claims should hold up as per-repo receipts instead of a single headline number. | The repo now publishes small-library, service, and monorepo fixture-style rows under [`docs/benchmarks/suite/results/2026-05-31T12-00-00/summary.md`](docs/benchmarks/suite/results/2026-05-31T12-00-00/summary.md), including initial implement/review workflow-outcome receipts, but that matrix is still proxy-heavy and repo-specific. | Add more measured rows under `docs/benchmarks/suite/results/`, especially public Python/Go targets and more non-fixture prompts, while keeping each row tied to its repo/task cell. |
 | Madar can be scored on bounded implementation-task correctness signals. | A deterministic implementation-task receipt now exists under [`docs/benchmarks/2026-05-31-implement-outcome/`](docs/benchmarks/2026-05-31-implement-outcome/README.md). It records files touched, wrong-file edits, validation commands, and reviewer-visible correctness on an isolated fixture harness without turning that one row into a generalized product claim. | Add more implementation rows across distinct repos/tasks, then promote only the metrics that stay stable across cells. |
 | Install-guided bounded retrieval should hold across more repos and prompts. | Evidence is mixed today; the FounderCommandCenter contrast note shows a case where the pack acted as extra context instead of a stop condition. | Keep publishing counterexamples and positive receipts side-by-side, starting with [`docs/benchmarks/2026-05-25-founder-command-center-auth-flow/`](docs/benchmarks/2026-05-25-founder-command-center-auth-flow/README.md) and future suite rows. |
 
@@ -24,7 +24,7 @@ This file is the public map between what Madar says and what the repo can actual
 
 | Claim | Why it is not public copy today |
 | --- | --- |
-| Madar improves implementation outcomes across repos or consistently avoids wrong-file edits. | We now have one deterministic implementation-task receipt, but we do not yet have cross-repo implementation-task evidence strong enough for a generalized public win claim. Track that under [#332](https://github.com/mohanagy/madar/issues/332). |
+| Madar improves implementation outcomes across repos or consistently avoids wrong-file edits. | We now have one deterministic implementation-task receipt and initial implement/review workflow-outcome suite rows, but we do not yet have cross-repo implementation-task evidence strong enough for a generalized public win claim. Track broader validation under [#332](https://github.com/mohanagy/madar/issues/332). |
 | Lower-confidence packs behave as well as the demonstrated high-confidence release cell. | The `0.27.0` public receipt is one strong, install-verified explain cell; medium/low-confidence prompts still need their own measured rows. |
 | A universal turns / latency / exploration win across repos. | Public receipts are repo- and prompt-specific, so they do not justify a single-number cross-repo headline. |
 | The agent always stops exploring after one pack. | Madar shapes the first pass, but it does not control the runtime or guarantee tool behavior. |
@@ -42,4 +42,5 @@ This file is the public map between what Madar says and what the repo can actual
 - [`docs/benchmarks/2026-05-25-founder-command-center-auth-flow/`](docs/benchmarks/2026-05-25-founder-command-center-auth-flow/README.md) — mixed exploration evidence, including the FounderCommandCenter contrast note.
 - [`docs/benchmarks/govalidate-suite/`](docs/benchmarks/govalidate-suite/README.md) — public prompt set plus deterministic pack/answer quality gates.
 - [`docs/benchmarks/suite/`](docs/benchmarks/suite/README.md) — fixed manifests, methodology, CLI runner, and per-repo spread results.
+- [`docs/benchmarks/suite/results/2026-05-31T12-00-00/summary.md`](docs/benchmarks/suite/results/2026-05-31T12-00-00/summary.md) — the first multi-shape suite bundle, including initial implement/review workflow-outcome rows.
 - [`docs/benchmarks/suite/results/2026-05-26T18-31-04/summary.md`](docs/benchmarks/suite/results/2026-05-26T18-31-04/summary.md) — the first measured warm-cache `nestjs-mid` / `explain-runtime` suite row.
