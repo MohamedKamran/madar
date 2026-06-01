@@ -115,7 +115,7 @@ describe('pack-quality fixtures (#298)', () => {
       ]
       if (forbiddenLikelyEditFiles) {
         expect(result.payload.likely_edit_files?.map((entry) => entry.path)).not.toEqual(
-          expect.arrayContaining(forbiddenLikelyEditFiles),
+          expect.arrayContaining([...forbiddenLikelyEditFiles]),
         )
       }
 
