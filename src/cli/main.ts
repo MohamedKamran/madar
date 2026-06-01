@@ -340,12 +340,12 @@ function readInstalledVersionForTelemetry(dependencies: CliDependencies): string
   return readInstalledVersion()
 }
 
-function emitTelemetry(io: CliIO, dependencies: CliDependencies, event: TelemetryEventInput): void {
+function emitTelemetry(io: CliIO, dependencies: CliDependencies, buildEvent: () => TelemetryEventInput): void {
   if (!dependencies.recordTelemetryEvent) {
     return
   }
   try {
-    dependencies.recordTelemetryEvent(event)
+    dependencies.recordTelemetryEvent(buildEvent())
   } catch (error) {
     io.error(`[madar telemetry] ${messageFromError(error)}`)
   }
@@ -655,12 +655,12 @@ function handleAgentCommand(command: AgentPlatform, args: string[], io: CliIO, d
   const options = parsePlatformActionArgs(command, args)
   if (options.action === 'install') {
     io.log(dependencies.agentsInstall('.', command))
-    emitTelemetry(io, dependencies, {
+    emitTelemetry(io, dependencies, () => ({
       event: 'install_success',
       version: readInstalledVersionForTelemetry(dependencies),
       os: process.platform,
       installPlatform: command,
-    })
+    }))
     return 0
   }
 
@@ -712,12 +712,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
       if (output !== undefined) {
         io.log(output)
       }
-      emitTelemetry(io, dependencies, {
+      emitTelemetry(io, dependencies, () => ({
         event: 'compare_success',
         version: readInstalledVersionForTelemetry(dependencies),
         os: process.platform,
         repoSizeBucket: repoSizeBucketForGraph(dependencies, options.graphPath),
-      })
+      }))
       return 0
     }
 
@@ -786,12 +786,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
       if (output !== undefined) {
         io.log(output)
       }
-      emitTelemetry(io, dependencies, {
+      emitTelemetry(io, dependencies, () => ({
         event: 'pack_success',
         version: readInstalledVersionForTelemetry(dependencies),
         os: process.platform,
         repoSizeBucket: repoSizeBucketForGraph(dependencies, options.graphPath),
-      })
+      }))
       return 0
     }
 
@@ -861,12 +861,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
         io.log(`[madar neo4j] Pushed ${pushResult.nodes} nodes and ${pushResult.edges} edges to ${pushResult.uri} (database ${pushResult.database})`)
       }
 
-      emitTelemetry(io, dependencies, {
+      emitTelemetry(io, dependencies, () => ({
         event: 'generate_success',
         version: readInstalledVersionForTelemetry(dependencies),
         os: process.platform,
         repoSizeBucket: repoSizeBucketFromFileCount(result.totalFiles),
-      })
+      }))
       if (options.watch) {
         await dependencies.watchGraph(options.path, options.debounceSeconds, {
           followSymlinks: options.followSymlinks,
@@ -1057,12 +1057,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
       } else {
         io.log(dependencies.installSkill(options.platform))
       }
-      emitTelemetry(io, dependencies, {
+      emitTelemetry(io, dependencies, () => ({
         event: 'install_success',
         version: readInstalledVersionForTelemetry(dependencies),
         os: process.platform,
         installPlatform: options.platform,
-      })
+      }))
       return 0
     }
 
@@ -1089,12 +1089,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
         ? dependencies.claudeInstall('.', options.profile ? { profile: options.profile } : {})
         : dependencies.claudeUninstall('.'))
       if (options.action === 'install') {
-        emitTelemetry(io, dependencies, {
+        emitTelemetry(io, dependencies, () => ({
           event: 'install_success',
           version: readInstalledVersionForTelemetry(dependencies),
           os: process.platform,
           installPlatform: 'claude',
-        })
+        }))
       }
       return 0
     }
@@ -1108,12 +1108,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
         ? dependencies.cursorInstall('.', options.profile ? { profile: options.profile } : {})
         : dependencies.cursorUninstall('.'))
       if (options.action === 'install') {
-        emitTelemetry(io, dependencies, {
+        emitTelemetry(io, dependencies, () => ({
           event: 'install_success',
           version: readInstalledVersionForTelemetry(dependencies),
           os: process.platform,
           installPlatform: 'cursor',
-        })
+        }))
       }
       return 0
     }
@@ -1125,12 +1125,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
       }
       io.log(options.action === 'install' ? dependencies.geminiInstall('.', options.profile ? { profile: options.profile } : {}) : dependencies.geminiUninstall('.'))
       if (options.action === 'install') {
-        emitTelemetry(io, dependencies, {
+        emitTelemetry(io, dependencies, () => ({
           event: 'install_success',
           version: readInstalledVersionForTelemetry(dependencies),
           os: process.platform,
           installPlatform: 'gemini',
-        })
+        }))
       }
       return 0
     }
@@ -1143,12 +1143,12 @@ export async function executeCli(argv: string[], io: CliIO = console, dependenci
         }
         io.log(dependencies.installSkill('copilot'))
         io.log(dependencies.installCopilotMcp('.', options.profile ? { profile: options.profile } : {}))
-        emitTelemetry(io, dependencies, {
+        emitTelemetry(io, dependencies, () => ({
           event: 'install_success',
           version: readInstalledVersionForTelemetry(dependencies),
           os: process.platform,
           installPlatform: 'copilot',
-        })
+        }))
       } else {
         io.log(dependencies.uninstallCopilotMcp('.'))
         io.log(dependencies.uninstallSkill('copilot'))

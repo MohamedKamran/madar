@@ -177,4 +177,49 @@ describe('telemetry', () => {
       rmSync(cacheRoot, { recursive: true, force: true })
     }
   })
+
+  it('falls back to the default cap when maxEvents is zero or negative', () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'madar-telemetry-config-'))
+    const cacheRoot = mkdtempSync(join(tmpdir(), 'madar-telemetry-cache-'))
+
+    try {
+      enableTelemetry({
+        configRoot,
+        cacheRoot,
+        env: {},
+      })
+
+      expect(recordTelemetryEvent({
+        event: 'generate_success',
+        version: '0.27.4',
+        os: 'darwin',
+        repoSizeBucket: '25-99',
+      }, {
+        configRoot,
+        cacheRoot,
+        env: {},
+        maxEvents: 0,
+        now: () => 1_700_000_000_000,
+      })).toBe(true)
+
+      expect(recordTelemetryEvent({
+        event: 'pack_success',
+        version: '0.27.4',
+        os: 'darwin',
+        repoSizeBucket: '25-99',
+      }, {
+        configRoot,
+        cacheRoot,
+        env: {},
+        maxEvents: -5,
+        now: () => 1_700_000_010_000,
+      })).toBe(true)
+
+      const spoolFile = join(cacheRoot, 'madar', 'telemetry-events.json')
+      expect(JSON.parse(readFileSync(spoolFile, 'utf8')).events).toHaveLength(2)
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true })
+      rmSync(cacheRoot, { recursive: true, force: true })
+    }
+  })
 })

@@ -1499,6 +1499,26 @@ describe('cli main', () => {
     ])
   })
 
+  it('treats telemetry helper failures as non-fatal command warnings', async () => {
+    const { io, logs, errors } = createIo()
+    const dependencies = createDependencies() as CliDependencies & {
+      recordTelemetryEvent: (event: unknown) => void
+      readInstalledVersion: () => string
+    }
+
+    dependencies.runContextPack = async () => 'pack result'
+    dependencies.recordTelemetryEvent = () => {}
+    dependencies.readInstalledVersion = () => {
+      throw new Error('version unavailable')
+    }
+
+    const exitCode = await executeCli(['pack', 'explain auth flow'], io, dependencies)
+
+    expect(exitCode).toBe(0)
+    expect(logs).toEqual(['pack result'])
+    expect(errors).toContain('[madar telemetry] version unavailable')
+  })
+
   it('routes proof-report through the injected dependency after parsing args', async () => {
     const { io, logs, errors } = createIo()
     const dependencies = createDependencies() as CliDependencies & {

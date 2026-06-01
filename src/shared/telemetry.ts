@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, platform } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -50,6 +50,8 @@ interface TelemetrySpool {
 }
 
 const DEFAULT_MAX_EVENTS = 200
+const LOCK_RETRY_DELAY_MS = 10
+const LOCK_TIMEOUT_MS = 1_000
 
 function defaultConfigRoot(env: NodeJS.ProcessEnv): string {
   if (typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim().length > 0) {
@@ -155,9 +157,43 @@ function loadSpool(spoolFile: string): TelemetrySpool {
   return parseSpool(readFileSync(spoolFile, 'utf8')) ?? { schema_version: 1, events: [] }
 }
 
+function uniqueTempPath(targetPath: string): string {
+  return `${targetPath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`
+}
+
+function sleepMs(durationMs: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, durationMs)
+}
+
+function withExclusiveLock<T>(targetPath: string, action: () => T): T {
+  const lockPath = `${targetPath}.lock`
+  const start = Date.now()
+  mkdirSync(dirname(lockPath), { recursive: true })
+
+  while (true) {
+    try {
+      const lockFd = openSync(lockPath, 'wx')
+      try {
+        return action()
+      } finally {
+        closeSync(lockFd)
+        rmSync(lockPath, { force: true })
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') {
+        throw error
+      }
+      if (Date.now() - start >= LOCK_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for telemetry lock at ${lockPath}`)
+      }
+      sleepMs(LOCK_RETRY_DELAY_MS)
+    }
+  }
+}
+
 function writeJsonAtomic(targetPath: string, value: unknown): void {
   mkdirSync(dirname(targetPath), { recursive: true })
-  const tempPath = `${targetPath}.tmp`
+  const tempPath = uniqueTempPath(targetPath)
   try {
     writeFileSync(tempPath, JSON.stringify(value, null, 2))
     renameSync(tempPath, targetPath)
@@ -283,11 +319,14 @@ export function enableTelemetry(options: TelemetryOptions = {}): string {
   const configRoot = options.configRoot ?? defaultConfigRoot(env)
   const cacheRoot = options.cacheRoot ?? defaultCacheRoot(env)
   const now = options.now ?? Date.now
-  writeJsonAtomic(telemetryConfigFilePath(configRoot), {
-    schema_version: 1,
-    enabled: true,
-    updated_at: now(),
-  } satisfies TelemetryConfig)
+  const configFile = telemetryConfigFilePath(configRoot)
+  withExclusiveLock(configFile, () => {
+    writeJsonAtomic(configFile, {
+      schema_version: 1,
+      enabled: true,
+      updated_at: now(),
+    } satisfies TelemetryConfig)
+  })
   return formatTelemetryPreferenceUpdate(true, getTelemetryStatus({ ...options, configRoot, cacheRoot, env }))
 }
 
@@ -296,11 +335,14 @@ export function disableTelemetry(options: TelemetryOptions = {}): string {
   const configRoot = options.configRoot ?? defaultConfigRoot(env)
   const cacheRoot = options.cacheRoot ?? defaultCacheRoot(env)
   const now = options.now ?? Date.now
-  writeJsonAtomic(telemetryConfigFilePath(configRoot), {
-    schema_version: 1,
-    enabled: false,
-    updated_at: now(),
-  } satisfies TelemetryConfig)
+  const configFile = telemetryConfigFilePath(configRoot)
+  withExclusiveLock(configFile, () => {
+    writeJsonAtomic(configFile, {
+      schema_version: 1,
+      enabled: false,
+      updated_at: now(),
+    } satisfies TelemetryConfig)
+  })
   return formatTelemetryPreferenceUpdate(false, getTelemetryStatus({ ...options, configRoot, cacheRoot, env }))
 }
 
@@ -313,20 +355,25 @@ export function recordTelemetryEvent(input: TelemetryEventInput, options: Teleme
   }
 
   const now = options.now ?? Date.now
-  const maxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS
+  const requestedMaxEvents = options.maxEvents ?? DEFAULT_MAX_EVENTS
+  const maxEvents = Number.isInteger(requestedMaxEvents) && requestedMaxEvents > 0
+    ? requestedMaxEvents
+    : DEFAULT_MAX_EVENTS
   const spoolFile = telemetrySpoolFilePath(cacheRoot)
-  const spool = loadSpool(spoolFile)
-  spool.events.push({
-    event: input.event,
-    recorded_at: new Date(now()).toISOString(),
-    version: input.version,
-    os: input.os,
-    ...(input.repoSizeBucket ? { repo_size_bucket: input.repoSizeBucket } : {}),
-    ...(input.installPlatform ? { install_platform: input.installPlatform } : {}),
+  withExclusiveLock(spoolFile, () => {
+    const spool = loadSpool(spoolFile)
+    spool.events.push({
+      event: input.event,
+      recorded_at: new Date(now()).toISOString(),
+      version: input.version,
+      os: input.os,
+      ...(input.repoSizeBucket ? { repo_size_bucket: input.repoSizeBucket } : {}),
+      ...(input.installPlatform ? { install_platform: input.installPlatform } : {}),
+    })
+    if (spool.events.length > maxEvents) {
+      spool.events = spool.events.slice(-maxEvents)
+    }
+    writeJsonAtomic(spoolFile, spool)
   })
-  if (spool.events.length > maxEvents) {
-    spool.events = spool.events.slice(-maxEvents)
-  }
-  writeJsonAtomic(spoolFile, spool)
   return true
 }
