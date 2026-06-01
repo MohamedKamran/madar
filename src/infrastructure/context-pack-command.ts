@@ -36,7 +36,7 @@ import {
   type MadarResponseEvidence,
 } from '../runtime/mcp-response-evidence.js'
 import { buildContextPackGovernanceReceipt } from '../runtime/context-pack-governance.js'
-import { graphFreshnessMetadata } from '../runtime/freshness.js'
+import { graphFreshnessMetadata, type GraphFreshnessMetadata } from '../runtime/freshness.js'
 import { buildRoutingDebug } from '../runtime/routing-debug.js'
 import { communitiesFromGraph, estimateQueryTokens, loadGraph } from '../runtime/serve.js'
 
@@ -979,6 +979,21 @@ function emptyCoverage(): ContextPackCoverage {
   }
 }
 
+function safeGraphFreshnessMetadata(graphPath: string): GraphFreshnessMetadata {
+  try {
+    return graphFreshnessMetadata(graphPath)
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Graph file not found:')) {
+      return {
+        graphVersion: 'unavailable',
+        graphModifiedMs: 0,
+        graphModifiedAt: new Date(0).toUTCString(),
+      }
+    }
+    throw error
+  }
+}
+
 function contextMetadata(
   payload: Partial<{
     claims: ContextPackClaim[]
@@ -1615,7 +1630,7 @@ function buildPackSchemaV1<TPack extends PackPayload>(
   const retrievalStrategy = retrieval?.retrieval_strategy ?? ('retrieval_strategy' in response.pack ? response.pack.retrieval_strategy : undefined)
   const governanceBase = {
     surface: 'cli_pack' as const,
-    graphFreshness: graphFreshnessMetadata(response.graph_path),
+    graphFreshness: safeGraphFreshnessMetadata(response.graph_path),
     task: response.task,
     taskIntent: response.task_intent,
     budget: response.budget,
