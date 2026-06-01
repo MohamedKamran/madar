@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { KnowledgeGraph } from '../../src/contracts/graph.js'
 import { build } from '../../src/pipeline/build.js'
 import {
   executeNativeAgentCompare,
@@ -15,6 +16,7 @@ import {
   type NativeAgentRunner,
 } from '../../src/infrastructure/compare.js'
 import { claudeInstall } from '../../src/infrastructure/install.js'
+import { toJson } from '../../src/pipeline/export.js'
 
 const FIXTURE_PARENT = resolve('out', 'test-runtime', 'native-agent')
 const COMPARE_OUTPUT_PARENT = resolve('out', 'compare', 'test-runtime-native-agent')
@@ -55,6 +57,147 @@ function makeFixtureProject(
     installClaudeWithProfile(projectDir, options.profile ? { profile: options.profile } : undefined)
   }
   return { projectDir, graphPath, outputDir }
+}
+
+function makeImplementationFixtureProject(): {
+  projectDir: string
+  graphPath: string
+  outputDir: string
+  questionsPath: string
+} {
+  const { projectDir, outputDir } = makeFixtureProject()
+  mkdirSync(join(projectDir, 'src'), { recursive: true })
+  mkdirSync(join(projectDir, 'tests'), { recursive: true })
+  mkdirSync(join(projectDir, 'scripts'), { recursive: true })
+  mkdirSync(join(projectDir, 'benchmarks', 'implement'), { recursive: true })
+
+  writeFileSync(
+    join(projectDir, 'src', 'session.ts'),
+    [
+      'export class SessionManager {',
+      '  createSession(userId: string) {',
+      '    return `session:${userId}`',
+      '  }',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    join(projectDir, 'src', 'config.ts'),
+    [
+      'export const config = {',
+      '  sessionTtlSeconds: 86400,',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    join(projectDir, 'tests', 'session.test.ts'),
+    [
+      'import { SessionManager } from "../src/session"',
+      '',
+      'export function assertSessionManager() {',
+      '  return new SessionManager()',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    join(projectDir, 'scripts', 'check-session.mjs'),
+    [
+      "import { readFileSync } from 'node:fs'",
+      "import { join } from 'node:path'",
+      '',
+      "const sessionSource = readFileSync(join(process.cwd(), 'src', 'session.ts'), 'utf8')",
+      "if (!sessionSource.includes('slidingExpirationMs')) {",
+      "  console.error('missing sliding expiration implementation')",
+      '  process.exit(1)',
+      '}',
+      '',
+      "console.log('validation ok')",
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    join(projectDir, 'package.json'),
+    JSON.stringify({
+      name: 'implement-fixture',
+      private: true,
+      type: 'module',
+      scripts: {
+        typecheck: 'node scripts/check-session.mjs',
+        build: 'node scripts/check-session.mjs',
+        test: 'node scripts/check-session.mjs',
+      },
+    }, null, 2),
+    'utf8',
+  )
+
+  const question = 'Implement sliding session expiration in SessionManager'
+  const questionsPath = join(projectDir, 'benchmarks', 'implement', 'questions.json')
+  writeFileSync(questionsPath, JSON.stringify([{ question }], null, 2), 'utf8')
+  writeFileSync(
+    join(projectDir, 'benchmarks', 'implement', 'implementation-gates.json'),
+    JSON.stringify({
+      [question]: {
+        checks: [
+          {
+            path: 'src/session.ts',
+            must_contain: ['slidingExpirationMs'],
+          },
+          {
+            path: 'src/config.ts',
+            must_not_contain: ['slidingExpirationMs'],
+          },
+        ],
+      },
+    }, null, 2),
+    'utf8',
+  )
+
+  const graph = new KnowledgeGraph()
+  graph.graph.root_path = projectDir
+  graph.addNode('session_manager', {
+    label: 'SessionManager',
+    source_file: 'src/session.ts',
+    source_location: 'L1',
+    line_number: 1,
+    node_kind: 'class',
+    file_type: 'code',
+    community: 0,
+  })
+  graph.addNode('config', {
+    label: 'config',
+    source_file: 'src/config.ts',
+    source_location: 'L1',
+    line_number: 1,
+    node_kind: 'constant',
+    file_type: 'code',
+    community: 0,
+  })
+  graph.addNode('session_test', {
+    label: 'SessionManager test',
+    source_file: 'tests/session.test.ts',
+    source_location: 'L1',
+    line_number: 1,
+    node_kind: 'function',
+    file_type: 'code',
+    community: 1,
+  })
+  graph.addEdge('session_test', 'session_manager', {
+    relation: 'tests',
+    confidence: 'EXTRACTED',
+    source_file: 'tests/session.test.ts',
+  })
+
+  const graphPath = join(projectDir, 'out', 'graph.json')
+  toJson(graph, { 0: ['session_manager', 'config'], 1: ['session_test'] }, graphPath)
+
+  return { projectDir, graphPath, outputDir, questionsPath }
 }
 
 function makeImplementFixtureProject(): { projectDir: string; graphPath: string; outputDir: string } {
@@ -101,7 +244,6 @@ function makeImplementFixtureProject(): { projectDir: string; graphPath: string;
     }, null, 2),
     'utf8',
   )
-
   const graph = build(
     [
       {
@@ -773,6 +915,7 @@ function buildSummaryResult(overrides: {
     reports: [
       {
         baseline_mode: 'native_agent',
+        task: 'explain',
         question: overrides.question,
         graph_path: '/tmp/project/out/graph.json',
         isolation: false,
@@ -978,6 +1121,216 @@ describe('executeNativeAgentCompare', () => {
       expect(prompt).toContain('Call context_pack first')
       expect(prompt).toContain('Inspect evidence.pack_confidence, evidence.coverage, evidence.agent_directive, missing_context, and recommended_first_read')
       expect(prompt).toContain('If evidence.agent_directive is answer_from_pack, answer from the pack and stop without raw search')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('records implement-task outcome scoring with isolated per-arm workspaces', async () => {
+    const { projectDir, graphPath, outputDir, questionsPath } = makeImplementationFixtureProject()
+    try {
+      const runner: NativeAgentRunner = async (input) => {
+        const workspaceRoot = input.cwd ?? projectDir
+        if (input.mode === 'baseline') {
+          writeFileSync(
+            join(workspaceRoot, 'src', 'config.ts'),
+            [
+              'export const config = {',
+              '  sessionTtlSeconds: 86400,',
+              '  slidingExpirationMs: 30000,',
+              '}',
+              '',
+            ].join('\n'),
+            'utf8',
+          )
+        } else {
+          writeFileSync(
+            join(workspaceRoot, 'src', 'session.ts'),
+            [
+              'export class SessionManager {',
+              '  readonly slidingExpirationMs = 30000',
+              '',
+              '  createSession(userId: string) {',
+              '    return `session:${userId}`',
+              '  }',
+              '}',
+              '',
+            ].join('\n'),
+            'utf8',
+          )
+        }
+
+        return {
+          exitCode: 0,
+          stdout: `${JSON.stringify({
+            ...(input.mode === 'baseline' ? BASELINE_USAGE_PAYLOAD : MADAR_USAGE_PAYLOAD),
+            result: input.mode === 'baseline' ? 'updated config' : 'updated session manager',
+          })}\n`,
+          stderr: '',
+          elapsedMs: input.mode === 'baseline' ? 11 : 7,
+        }
+      }
+
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          questionsPath,
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+          task: 'implement',
+        },
+        {
+          runner,
+          now: () => new Date('2026-05-31T12:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.task).toBe('implement')
+      expect(report.implementation_guidance?.likely_edit_files.map((entry) => entry.path)).toContain('src/session.ts')
+      expect(report.implementation_guidance?.validation_commands).toContain('npm run typecheck')
+      expect(report.implement_outcome).toEqual({
+        baseline: expect.objectContaining({
+          files_touched: ['src/config.ts'],
+          wrong_file_edits: ['src/config.ts'],
+          validation: expect.objectContaining({
+            status: 'failed',
+          }),
+          reviewer_visible_correctness: expect.objectContaining({
+            status: 'failed',
+          }),
+        }),
+        madar: expect.objectContaining({
+          files_touched: ['src/session.ts'],
+          wrong_file_edits: [],
+          validation: expect.objectContaining({
+            status: 'passed',
+          }),
+          reviewer_visible_correctness: expect.objectContaining({
+            status: 'passed',
+          }),
+        }),
+      })
+
+      const prompt = readFileSync(report.paths.prompt_file, 'utf8')
+      expect(prompt).toContain('Implement the requested change using the Madar implementation pack.')
+      expect(prompt).toContain('src/session.ts')
+      expect(prompt).toContain('npm run typecheck')
+
+      const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
+      const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
+      expect(savedReport).toEqual(expect.objectContaining({
+        task: 'implement',
+        implement_outcome: expect.objectContaining({
+          baseline: expect.objectContaining({
+            wrong_file_edits: ['src/config.ts'],
+          }),
+          madar: expect.objectContaining({
+            wrong_file_edits: [],
+          }),
+        }),
+      }))
+      expect(shareSafeReport).toEqual(expect.objectContaining({
+        task: 'implement',
+        implement_outcome: expect.objectContaining({
+          madar: expect.objectContaining({
+            files_touched: ['src/session.ts'],
+          }),
+        }),
+      }))
+
+      expect(readFileSync(join(projectDir, 'src', 'session.ts'), 'utf8')).not.toContain('slidingExpirationMs')
+      expect(readFileSync(join(projectDir, 'src', 'config.ts'), 'utf8')).not.toContain('slidingExpirationMs')
+
+      const summary = formatNativeAgentCompareSummary(result)
+      expect(summary).toContain('implement outcome:')
+      expect(summary).toContain('wrong-file edits')
+      expect(summary).toContain('reviewer-visible')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('times out implement validation commands instead of hanging after the agent run', async () => {
+    const { projectDir, graphPath, outputDir, questionsPath } = makeImplementationFixtureProject()
+    try {
+      writeFileSync(
+        join(projectDir, 'package.json'),
+        JSON.stringify({
+          name: 'implement-timeout-fixture',
+          private: true,
+          type: 'module',
+          scripts: {
+            typecheck: 'node -e "setTimeout(() => process.exit(0), 5000)"',
+          },
+        }, null, 2),
+        'utf8',
+      )
+
+      const runner: NativeAgentRunner = async (input) => {
+        const workspaceRoot = input.cwd ?? projectDir
+        writeFileSync(
+          join(workspaceRoot, 'src', 'session.ts'),
+          [
+            'export class SessionManager {',
+            '  readonly slidingExpirationMs = 30000',
+            '',
+            '  createSession(userId: string) {',
+            '    return `session:${userId}`',
+            '  }',
+            '}',
+            '',
+          ].join('\n'),
+          'utf8',
+        )
+
+        return {
+          exitCode: 0,
+          stdout: `${JSON.stringify({
+            ...(input.mode === 'baseline' ? BASELINE_USAGE_PAYLOAD : MADAR_USAGE_PAYLOAD),
+            result: 'updated session manager',
+          })}\n`,
+          stderr: '',
+          elapsedMs: 5,
+        }
+      }
+
+      const request = {
+        graphPath,
+        questionsPath,
+        outputDir,
+        execTemplate: 'mock-runner',
+        baselineMode: 'native_agent',
+        task: 'implement',
+        validationTimeoutSeconds: 0.01,
+      } as Parameters<typeof executeNativeAgentCompare>[0] & { validationTimeoutSeconds: number }
+
+      const outcome = await Promise.race([
+        executeNativeAgentCompare(
+          request,
+          {
+            runner,
+            now: () => new Date('2026-06-01T00:00:00Z'),
+          },
+        ).then((result) => ({ kind: 'resolved' as const, result })),
+        new Promise<{ kind: 'hung' }>((resolve) => {
+          setTimeout(() => resolve({ kind: 'hung' }), 1000)
+        }),
+      ])
+
+      if (outcome.kind !== 'resolved') {
+        throw new Error('compare hung instead of timing out implement validation commands')
+      }
+
+      const report = outcome.result.reports[0] as NativeAgentCompareReport
+      expect(['failed', 'setup_error']).toContain(report.implement_outcome?.baseline.validation.status)
+      expect(['failed', 'setup_error']).toContain(report.implement_outcome?.madar.validation.status)
+      expect(report.implement_outcome?.baseline.validation.commands).toEqual([
+        expect.objectContaining({
+          command: 'npm run typecheck',
+        }),
+      ])
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }
@@ -1882,45 +2235,59 @@ describe('executeNativeAgentCompare', () => {
 
       const report = result.reports[0] as NativeAgentCompareReport & {
         implement_outcome?: {
-          outcome: string
-          checks: Record<string, string>
-          baseline: { touched_files: string[]; validation_status: string }
-          madar: { touched_files: string[]; validation_status: string }
+          baseline: {
+            files_touched: string[]
+            wrong_file_edits: string[]
+            validation: { status: string }
+          }
+          madar: {
+            files_touched: string[]
+            wrong_file_edits: string[]
+            validation: { status: string }
+          }
         }
       }
       const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as {
         implement_outcome?: {
-          outcome: string
-          checks: Record<string, string>
-          baseline: { touched_files: string[]; validation_status: string }
-          madar: { touched_files: string[]; validation_status: string }
+          baseline: {
+            files_touched: string[]
+            wrong_file_edits: string[]
+            validation: { status: string }
+          }
+          madar: {
+            files_touched: string[]
+            wrong_file_edits: string[]
+            validation: { status: string }
+          }
         }
         benchmark_outcome?: unknown
       }
       const summary = formatNativeAgentCompareSummary(result)
 
       expect(savedReport.implement_outcome).toEqual(expect.objectContaining({
-        outcome: 'full_win',
-        checks: expect.objectContaining({
-          edit_targeting: 'win',
-          test_coverage: 'win',
-          risk_boundary_respect: 'win',
-        }),
         baseline: expect.objectContaining({
-          touched_files: expect.arrayContaining(['src/legacy/noisy.ts']),
-          validation_status: 'failed',
+          files_touched: expect.arrayContaining(['src/legacy/noisy.ts']),
+          wrong_file_edits: ['src/legacy/noisy.ts'],
+          validation: expect.objectContaining({
+            status: 'failed',
+          }),
         }),
         madar: expect.objectContaining({
-          touched_files: expect.arrayContaining(['src/auth/login-service.ts', 'tests/unit/login-service.test.ts']),
-          validation_status: 'passed',
+          files_touched: expect.arrayContaining(['src/auth/login-service.ts', 'tests/unit/login-service.test.ts']),
+          wrong_file_edits: [],
+          validation: expect.objectContaining({
+            status: 'passed',
+          }),
         }),
       }))
       expect(report.implement_outcome).toEqual(savedReport.implement_outcome)
-      expect(savedReport.benchmark_outcome).toBeUndefined()
-      expect(summary).toContain('implement_outcome: full_win')
-      expect(summary).toContain('edit_targeting win')
-      expect(summary).toContain('test_coverage win')
-      expect(summary).toContain('risk_boundary_respect win')
+      expect(savedReport.benchmark_outcome).toEqual(expect.objectContaining({
+        outcome: 'partial_win',
+      }))
+      expect(summary).toContain('implement outcome:')
+      expect(summary).toContain('benchmark_outcome: partial_win')
+      expect(summary).toContain('wrong-file edit')
+      expect(summary).toContain('validation passed')
       expect(readFileSync(join(projectDir, 'src', 'auth', 'login-service.ts'), 'utf8')).toBe('export const loginValidation = "original"\n')
       expect(readFileSync(join(projectDir, 'tests', 'unit', 'login-service.test.ts'), 'utf8')).toBe('export const loginServiceTest = "original"\n')
     } finally {

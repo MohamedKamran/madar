@@ -7,7 +7,7 @@ Use this checklist when preparing a new `madar` release. It is intentionally man
 1. Update the package version with `npm version <patch|minor|major>`.
 2. Review `package.json` and `package-lock.json` to confirm the new version is correct.
 3. Update `CHANGELOG.md` with the user-visible changes in the release.
-4. Make sure any linked docs, examples, or install flows reflect the new behavior.
+4. Make sure any linked docs, examples, install flows, and `docs/mcp-registry/server.json` reflect the new behavior.
 5. Any new public claim requires a reproducible artifact under `docs/benchmarks/suite/` and a matching update to `docs/claims-and-evidence.md` before the README or release notes can say it publicly.
 
 ## 2. Run the required verification commands
@@ -16,13 +16,18 @@ From the repository root:
 
 ```bash
 npm install
+npm run release:verify
+npm run registry:validate
 npm run typecheck
 npm run build
 npm run test:run
 npm pack --dry-run
+npm sbom --sbom-format cyclonedx > sbom.cdx.json
 ```
 
-If the change touches packaging or installer behavior, keep the `npm pack --dry-run` output with the release notes or pull request for easy review.
+`npm run release:verify` locks the public package metadata, changelog version entry, and npm-visible README links before publish so repository/documentation drift is caught in one pass.
+
+If the change touches packaging, installer behavior, or public MCP Registry metadata, keep the `npm pack --dry-run` output with the release notes or pull request for easy review. Keep the generated `sbom.cdx.json` alongside the release PR or release notes as the checked supply-chain inventory snapshot for that version. Review [`docs/security/mcp-threat-model.md`](./security/mcp-threat-model.md) before publishing changes that affect MCP installs, share-safe artifacts, prompt handling, or local file boundaries.
 
 ## 3. Run manual CLI smoke checks
 
@@ -46,8 +51,11 @@ Recommended follow-up checks:
 
 After the verification steps are green:
 
-1. Push the release branch or merge commit.
-2. Publish from the verified tree with `npm publish --access public` when you are ready.
+1. Push and merge the verified release commit so the published README links already exist on the target release branch (`main` for stable releases, `next` for prereleases).
+2. Publish from that merged release commit:
+   - stable releases: `npm publish --access public --provenance`
+   - prereleases / `next`: `npm publish --tag next --access public --provenance`
+   If the release environment does not support npm provenance attestations, rerun the same command without `--provenance`.
 3. Create the matching Git tag if `npm version` did not already do so in your workflow.
 4. Draft or publish the GitHub release notes from the changelog entry.
 

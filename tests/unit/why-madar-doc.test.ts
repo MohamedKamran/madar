@@ -93,6 +93,14 @@ describe('public marketing copy honesty', () => {
       expect(lower).toContain('disk cache')
     })
 
+    it('explains when follow-up prompt sessions should and should not show reuse gains', () => {
+      expect(content).toContain('reuse the same `session_id`')
+      expect(content).toContain('`session_diagnostics`')
+      expect(lower).toContain('mostly stable retrieved graph context')
+      expect(lower).toContain('first turns')
+      expect(lower).toContain('heavily changed retrieved context')
+    })
+
     it('keeps the README core MCP surface aligned with the shipped graph_summary tool', () => {
       expect(content).toContain('These seven MCP tools')
       expect(content).toContain('`graph_stats`')
@@ -141,6 +149,34 @@ describe('public marketing copy honesty', () => {
       expect(content).toContain('docs/benchmarks/2026-05-25-founder-command-center-auth-flow/')
     })
 
+    it('positions Madar as a context/evidence layer for review and security tools without overclaiming outcomes', () => {
+      expect(lower).toContain('review and security workflows')
+      expect(lower).toContain('context/evidence layer')
+      expect(content).toContain('CodeRabbit')
+      expect(content).toContain('Qodo')
+      expect(content).toContain('Codex Security')
+      expect(lower).toContain('not a pr reviewer or vulnerability scanner')
+      expect(content).toContain('docs/claims-and-evidence.md')
+    })
+
+    it('states the near-term primary ICP and non-ICP explicitly', () => {
+      expect(lower).toContain('primary icp')
+      expect(lower).toContain('medium-to-large typescript/node repos')
+      expect(lower).toContain('cost, latency, privacy, or wrong-file-edit risk')
+      expect(lower).toContain('not the primary icp today')
+    })
+
+    it('frames the core promise as deterministic local context compilation that complements indexing', () => {
+      expect(lower).toContain('deterministic local context compilation')
+      expect(lower).toContain('complements agents and ide indexing')
+      expect(lower).toContain('not another generic codebase index')
+    })
+
+    it('links a bounded team and enterprise offer instead of implying hosted packaging', () => {
+      expect(content).toContain('docs/team-enterprise-offer.md')
+      expect(lower).toContain('team and enterprise offer')
+    })
+
     it('keeps the README Python support claim conservative and current', () => {
       expect(content).toContain('FastAPI router composition')
       expect(content).toContain('Django URL-conf')
@@ -154,7 +190,8 @@ describe('public marketing copy honesty', () => {
 
     it('starts the walkthrough with generate, summary, and compact retrieval surfaces', () => {
       expect(content).toContain('madar generate examples/sample-workspace --no-html')
-      expect(content).toContain('madar summary examples/sample-workspace/out/graph.json')
+      expect(content).toContain('cd examples/sample-workspace')
+      expect(content).toContain('madar summary out/graph.json')
       expect(content).toContain('madar pack')
       expect(content).toContain('madar prompt')
     })
@@ -181,19 +218,234 @@ describe('public marketing copy honesty', () => {
       expect(lower).toContain('not a live trace')
     })
 
-    describe('docs/claims-and-evidence.md', () => {
-      const content = readDoc('docs/claims-and-evidence.md')
-      const lower = content.toLowerCase()
+    it('maps a review/security-agent evaluation workflow onto review-compare and share-safe artifacts', () => {
+      expect(lower).toContain('review/security-agent evaluation workflow')
+      expect(content).toContain('review-compare')
+      expect(content).toContain('report.share-safe.json')
+      expect(content).toContain('CodeRabbit')
+      expect(content).toContain('Qodo')
+      expect(content).toContain('Codex Security')
+      expect(lower).toContain('does not prove that madar itself')
+    })
 
-      it('maps public claims to evidence and tracks unmeasured claims explicitly', () => {
-        expect(content).toContain('# Claims and evidence')
-        expect(content).toContain('## Demonstrated today')
-        expect(content).toContain('## In progress')
-        expect(content).toContain('## Not yet measured')
-        expect(content).toContain('README.md')
-        expect(content).toContain('docs/benchmarks/suite/')
-        expect(lower).toContain('foundercommandcenter')
-      })
+    it('links anonymized design-partner workflow notes without claiming live customer validation yet', () => {
+      expect(lower).toContain('design-partner workflow loop notes')
+      expect(lower).toContain('anonymized')
+      expect(lower).toContain('synthetic reproductions')
+      expect(lower).toContain('sensitive source')
+      expect(lower).toContain('customer details')
+      expect(content).toContain('docs/benchmarks/2026-06-01-design-partner-workflow-loops/')
+    })
+
+    it('links a synthetic federation receipt while keeping the enterprise use case concrete and bounded', () => {
+      expect(lower).toContain('enterprise differentiator')
+      expect(lower).toContain('frontend/backend/shared')
+      expect(lower).toContain('shared labels')
+      expect(lower).toContain('synthetic federation receipt')
+      expect(content).toContain('docs/benchmarks/2026-06-01-federation-flagship/')
+    })
+  })
+
+  describe('docs/claims-and-evidence.md', () => {
+    const content = readDoc('docs/claims-and-evidence.md')
+    const lower = content.toLowerCase()
+
+    it('maps public claims to evidence and tracks unmeasured claims explicitly', () => {
+      expect(content).toContain('# Claims and evidence')
+      expect(content).toContain('## Demonstrated today')
+      expect(content).toContain('## In progress')
+      expect(content).toContain('## Not yet measured')
+      expect(content).toContain('README.md')
+      expect(content).toContain('docs/benchmarks/suite/')
+      expect(lower).toContain('foundercommandcenter')
+    })
+
+    it('links the dated implementation receipt while keeping generalized implementation-win claims conservative', () => {
+      expect(content).toContain('docs/benchmarks/2026-05-31-implement-outcome/')
+      expect(lower).toContain('deterministic implementation-task receipt')
+      expect(lower).toContain('files touched')
+      expect(lower).toContain('wrong-file edits')
+      expect(lower).toContain('reviewer-visible')
+      expect(lower).toContain('we do not yet have cross-repo implementation-task evidence')
+    })
+
+    it('keeps review and security positioning tied to workflow guidance instead of unmeasured superiority claims', () => {
+      expect(lower).toContain('review and security tools')
+      expect(content).toContain('CodeRabbit')
+      expect(content).toContain('Qodo')
+      expect(content).toContain('Codex Security')
+      expect(lower).toContain('workflow guidance, not a measured superiority claim')
+      expect(lower).toContain('no comparative review/security evaluation')
+    })
+
+    it('keeps the README ICP and product-promise guidance bounded to the current evidence scope', () => {
+      expect(lower).toContain('medium-to-large typescript/node repos')
+      expect(lower).toContain('deterministic local context compilation')
+      expect(lower).toContain('complements agents and ide indexing')
+      expect(lower).toContain('not another generic codebase index')
+    })
+
+    it('keeps the team and enterprise offer guidance local-first and service-scoped', () => {
+      expect(lower).toContain('team and enterprise offer')
+      expect(lower).toContain('benchmark setup')
+      expect(lower).toContain('proof report')
+      expect(lower).toContain('procurement/security note')
+      expect(lower).toContain('local-first trust boundary')
+      expect(lower).toContain('not a hosted control plane')
+    })
+
+    it('keeps hosted-dashboard positioning deferred until share-safe demand exceeds the local report path', () => {
+      expect(lower).toContain('hosted dashboard')
+      expect(lower).toContain('report.share-safe.json')
+      expect(lower).toContain('graph.html')
+      expect(lower).toContain('explicit customer demand')
+      expect(lower).toContain('no cloud indexing assumption')
+    })
+
+    it('keeps distribution-channel positioning tied to shipped local installs and proof/onboarding readiness', () => {
+      expect(lower).toContain('distribution channels')
+      expect(lower).toContain('claude')
+      expect(lower).toContain('cursor')
+      expect(lower).toContain('copilot')
+      expect(lower).toContain('mcp directories')
+      expect(lower).toContain('proof/onboarding readiness')
+      expect(lower).toContain('local trust boundary')
+      expect(lower).toContain('avoid marketplace-scale adoption claims')
+    })
+
+    it('keeps language-expansion claims gated on TypeScript/Node proof plus benchmark or fixture evidence', () => {
+      expect(lower).toContain('language expansion')
+      expect(lower).toContain('typescript/node proof')
+      expect(lower).toContain('benchmark or fixture evidence')
+      expect(lower).toContain('no broad parity claim')
+    })
+
+    it('keeps design-partner workflow proof framed as anonymized drafts instead of five live partner wins', () => {
+      expect(lower).toContain('design-partner workflow')
+      expect(lower).toContain('anonymized')
+      expect(lower).toContain('workflow-loop notes')
+      expect(lower).toContain('synthetic reproductions')
+      expect(lower).toContain('not yet five live design partners')
+    })
+
+    it('treats federation as a bounded synthetic proof surface instead of a broad cross-repo benchmark headline', () => {
+      expect(lower).toContain('federation')
+      expect(lower).toContain('synthetic federation receipt')
+      expect(lower).toContain('shared labels')
+      expect(lower).toContain('not a broad cross-repo benchmark headline')
+      expect(content).toContain('docs/benchmarks/2026-06-01-federation-flagship/')
+    })
+  })
+
+  describe('docs/team-enterprise-offer.md', () => {
+    const content = readDoc('docs/team-enterprise-offer.md')
+    const lower = content.toLowerCase()
+
+    it('defines concise team and enterprise options around benchmark setup, proof reports, and local-only procurement notes', () => {
+      expect(content).toContain('# Team and enterprise offer')
+      expect(lower).toContain('team evaluation')
+      expect(lower).toContain('enterprise pilot')
+      expect(lower).toContain('benchmark setup')
+      expect(lower).toContain('proof report')
+      expect(lower).toContain('procurement/security note')
+      expect(lower).toContain('local-first trust boundary')
+      expect(lower).toContain('not a hosted control plane')
+    })
+
+    it('spells out what paid support includes and excludes', () => {
+      expect(lower).toContain('in scope')
+      expect(lower).toContain('out of scope')
+      expect(lower).toContain('shared benchmark setup')
+      expect(lower).toContain('internal proof report')
+      expect(lower).toContain('policy templates')
+      expect(lower).toContain('managed cloud hosting')
+      expect(lower).toContain('taking custody of your source code')
+    })
+  })
+
+  describe('docs/share-safe-dashboard-decision.md', () => {
+    const content = readDoc('docs/share-safe-dashboard-decision.md')
+    const lower = content.toLowerCase()
+
+    it('recommends deferring a hosted dashboard in favor of the current local report bundle', () => {
+      expect(content).toContain('# Share-safe dashboard decision')
+      expect(lower).toContain('recommendation: defer')
+      expect(lower).toContain('graph.html')
+      expect(lower).toContain('graph_report.md')
+      expect(lower).toContain('report.share-safe.json')
+      expect(lower).toContain('local html report')
+    })
+
+    it('defines the trust boundary and the threshold for revisiting the idea', () => {
+      expect(lower).toContain('share-safe artifacts only')
+      expect(lower).toContain('no raw source')
+      expect(lower).toContain('no prompt or answer uploads')
+      expect(lower).toContain('no cloud indexing assumption')
+      expect(lower).toContain('explicit customer demand')
+      expect(lower).toContain('build later')
+      expect(lower).toContain('reject now')
+    })
+  })
+
+  describe('docs/language-expansion-decision.md', () => {
+    const content = readDoc('docs/language-expansion-decision.md')
+    const lower = content.toLowerCase()
+
+    it('defines evidence gates before broader language expansion', () => {
+      expect(content).toContain('# Language expansion decision')
+      expect(lower).toContain('recommendation: defer')
+      expect(lower).toContain('typescript/node proof')
+      expect(lower).toContain('evidence gates')
+      expect(lower).toContain('benchmark or fixture evidence')
+    })
+
+    it('separates near-term, parked, and out-of-scope language requests clearly', () => {
+      expect(lower).toContain('near-term')
+      expect(lower).toContain('parked')
+      expect(lower).toContain('out of scope')
+      expect(lower).toContain('python')
+      expect(lower).toContain('go')
+      expect(lower).toContain('rust')
+      expect(lower).toContain('java')
+      expect(lower).toContain('typescript/node framework depth')
+      expect(lower).toContain('no broad parity claim')
+      expect(lower).toContain('claiming broad parity')
+      expect(lower).toContain('without supporting receipts')
+    })
+  })
+
+  describe('docs/distribution-channel-research.md', () => {
+    const content = readDoc('docs/distribution-channel-research.md')
+    const lower = content.toLowerCase()
+
+    it('ranks current and future agent-ecosystem channels into near-term, later, and avoid buckets', () => {
+      expect(content).toContain('# Distribution channel research')
+      expect(lower).toContain('near-term')
+      expect(lower).toContain('later')
+      expect(lower).toContain('avoid')
+      expect(lower).toContain('claude code')
+      expect(lower).toContain('cursor')
+      expect(lower).toContain('github copilot cli')
+      expect(lower).toContain('gemini cli')
+      expect(lower).toContain('codex cli')
+      expect(lower).toContain('aider')
+      expect(lower).toContain('opencode')
+      expect(lower).toContain('mcp directories')
+    })
+
+    it('links each channel bucket back to required packaging, docs, security, and proof readiness', () => {
+      expect(lower).toContain('packaging')
+      expect(lower).toContain('docs work')
+      expect(lower).toContain('security work')
+      expect(lower).toContain('proof/onboarding readiness')
+      expect(lower).toContain('local trust boundary')
+      expect(lower).toContain('no hosted relay')
+      expect(lower).toContain('source custody')
+    })
+
+    it('distinguishes the existing MCP Registry metadata from broader future directory expansion', () => {
+      expect(lower).toContain('mcp registry metadata already exists today')
+      expect(lower).toContain('broader directory/listing expansion')
     })
   })
 
@@ -207,6 +459,28 @@ describe('public marketing copy honesty', () => {
       expect(content).toContain('FastAPI')
       expect(content).toContain('Django')
       expect(content).toContain('router composition')
+    })
+
+    it('describes deeper framework hints conservatively and keeps the generic AST fallback explicit', () => {
+      expect(content).toContain('Hono')
+      expect(content).toContain('Fastify')
+      expect(content).toContain('tRPC')
+      expect(content).toContain('Prisma')
+      expect(content).toContain('request-flow')
+      expect(content).toContain('storage')
+      expect(content).toContain('runtime-boundary')
+      expect(content).toContain('generic AST structure')
+      expect(content).toContain('source-visible')
+      expect(content).toContain('visible client/server boundaries')
+      expect(content).toContain('source-visible Hono, Fastify, tRPC, and Prisma workflows get conservative deeper retrieval hints on the opt-in `--spi` pipeline')
+      expect(content).toContain('Hono, Fastify, tRPC, and Prisma currently contribute conservative request-flow and storage hints only on the opt-in `--spi` path')
+    })
+
+    it('frames non-TS/Node language support as first-pass coverage, not broad parity', () => {
+      expect(content).toContain('TypeScript/Node remains the near-term depth priority')
+      expect(content).toContain('Python and Go are useful first-pass support')
+      expect(content).toContain('broader parity is parked')
+      expect(content).toContain('docs/language-expansion-decision.md')
     })
   })
 
@@ -244,6 +518,64 @@ describe('public marketing copy honesty', () => {
       expect(readme).toContain('issue #69')
       expect(readme).toContain('v0.14-substrate')
       expect(readme).toContain('Backend-only vs monorepo')
+    })
+
+    describe('docs/benchmarks/2026-06-01-design-partner-workflow-loops/', () => {
+      const readme = readDoc('docs/benchmarks/2026-06-01-design-partner-workflow-loops/README.md')
+      const explainDraft = readDoc('docs/benchmarks/2026-06-01-design-partner-workflow-loops/01-explain-flow.md')
+      const reviewDraft = readDoc('docs/benchmarks/2026-06-01-design-partner-workflow-loops/02-review-pr.md')
+      const impactDraft = readDoc('docs/benchmarks/2026-06-01-design-partner-workflow-loops/03-impact-change.md')
+
+      it('publishes three anonymized workflow-loop drafts with a clear safety boundary', () => {
+        expect(readme).toContain('# 2026-06-01 design-partner workflow loops')
+        expect(readme).toContain('01-explain-flow.md')
+        expect(readme).toContain('02-review-pr.md')
+        expect(readme).toContain('03-impact-change.md')
+        expect(readme.toLowerCase()).toContain('anonymized')
+        expect(readme.toLowerCase()).toContain('synthetic reproductions')
+        expect(readme.toLowerCase()).toContain('sensitive source')
+        expect(readme.toLowerCase()).toContain('prompts')
+        expect(readme.toLowerCase()).toContain('customer details')
+        expect(readme.toLowerCase()).toContain('not yet five live design partners')
+      })
+
+      it('covers explain, review, and impact loops in separate drafts', () => {
+        expect(explainDraft).toContain('# Explain-flow workflow draft')
+        expect(explainDraft.toLowerCase()).toContain('anonymized repo owner')
+        expect(explainDraft.toLowerCase()).toContain('repeatable loop')
+        expect(reviewDraft).toContain('# Review-PR workflow draft')
+        expect(reviewDraft.toLowerCase()).toContain('share-safe artifact')
+        expect(reviewDraft.toLowerCase()).toContain('human follow-up')
+        expect(impactDraft).toContain('# Impact-change workflow draft')
+        expect(impactDraft.toLowerCase()).toContain('blast radius')
+        expect(impactDraft.toLowerCase()).toContain('change plan')
+      })
+    })
+
+    describe('docs/benchmarks/2026-06-01-federation-flagship/', () => {
+      const readme = readDoc('docs/benchmarks/2026-06-01-federation-flagship/README.md')
+      const receipt = JSON.parse(readDoc('docs/benchmarks/2026-06-01-federation-flagship/federation-receipt.json')) as {
+        repos: string[]
+        totalNodes: number
+        totalEdges: number
+        crossRepoEdges: number
+        communityCount: number
+      }
+
+      it('publishes a synthetic three-repo federation receipt with explicit scope limits', () => {
+        expect(readme).toContain('# 2026-06-01 federation flagship')
+        expect(readme).toContain('tests/fixtures/federation-flagship/')
+        expect(readme.toLowerCase()).toContain('synthetic federation receipt')
+        expect(readme.toLowerCase()).toContain('frontend/backend/shared')
+        expect(readme.toLowerCase()).toContain('enterprise differentiator')
+        expect(readme.toLowerCase()).toContain('shared labels')
+        expect(readme.toLowerCase()).toContain('not a broad cross-repo benchmark headline')
+        expect(receipt.repos).toEqual(['frontend', 'backend', 'shared'])
+        expect(receipt.totalNodes).toBeGreaterThan(0)
+        expect(receipt.totalEdges).toBeGreaterThan(0)
+        expect(receipt.crossRepoEdges).toBeGreaterThan(0)
+        expect(receipt.communityCount).toBeGreaterThan(0)
+      })
     })
 
     it('ships a runnable harness with the documented argument surface', () => {

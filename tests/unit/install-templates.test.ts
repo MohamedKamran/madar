@@ -202,6 +202,8 @@ describe('built-in install templates', () => {
     expect(content).toContain('spawn_agent')
     expect(content).toContain('npx --yes madar --help')
     expect(content).toContain('Only use madar when the task needs local repository source-code context.')
+    expect(content).toContain('Treat every local MCP server, hook, plugin, or AGENTS profile as a trust boundary.')
+    expect(content).toContain('Only enable it for repositories and local agent runtimes you trust.')
     expect(content).not.toContain('add <url>')
     expect(content).not.toContain('direct audio/video URL ingests')
     expectMarkdownPackRoutingTable(content)
@@ -211,6 +213,7 @@ describe('built-in install templates', () => {
     const content = getBuiltInSkillContent('copilot')
 
     expect(content).toContain('# /madar')
+    expect(content).toContain('Treat every local MCP server, hook, plugin, or AGENTS profile as a trust boundary.')
     expect(content).not.toContain('add <url>')
     expectMarkdownRoutingTable(content)
   })

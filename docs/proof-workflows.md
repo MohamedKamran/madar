@@ -95,6 +95,17 @@ Use this when the question is not "madar vs. naive baseline", but "did compact r
 
 As with `compare` and `benchmark`, the prompt and answer file contents stay local, while `report.share-safe.json` keeps the review metrics plus sanitized placeholder paths to those artifacts so you can share evidence without publishing your exact local artifact paths.
 
+### Review/security-agent evaluation workflow
+
+Use this path when the question is not just "did Madar shrink the prompt?", but "how should a review or security agent consume bounded diff evidence, and how do we compare that workflow across tools?"
+
+1. Generate the graph locally and run `madar review-compare out/graph.json --exec ... --yes` (or capture the compact `pr_impact` payload for the current diff).
+2. Keep the local `report.json` for the full artifact bundle, and share `report.share-safe.json` when you need to hand a sanitized receipt to another system or attach evidence to a PR discussion.
+3. Run the same diff through CodeRabbit, Qodo, Codex Security, or another review/security agent and compare overlap, misses, and human follow-up against the Madar-backed receipt.
+4. Record the outcome as workflow evidence: what risks were surfaced, what needed more repo reads, and whether the compact evidence changed review/security-agent behavior.
+
+This review/security-agent evaluation workflow does not prove that Madar itself is the reviewer or that it finds more security issues than CodeRabbit, Qodo, or Codex Security. It proves whether Madar's bounded evidence surfaces make those review/security workflows easier to evaluate, reproduce, and share safely.
+
 ## 4. Production and multi-repo proof
 
 For real systems, the strongest proof is usually:
@@ -118,12 +129,25 @@ madar federate \
 madar serve federated-out/graph.json --stdio
 ```
 
+The smallest checked-in version of that story now lives under [`docs/benchmarks/2026-06-01-federation-flagship/`](docs/benchmarks/2026-06-01-federation-flagship/README.md). It is a **synthetic federation receipt** built around a **frontend/backend/shared** fixture, and it exists because federation can be an **enterprise differentiator** when teams need one auditable local graph across multiple repos. The current receipt is intentionally explicit that cross-repo links come from **shared labels**, so it is a reproducible workflow note rather than a broad cross-repo benchmark headline.
+
 What this proves that a single-repo demo cannot:
 
 - cross-repo type and symbol stitching
 - blast-radius analysis across repo boundaries
 - one MCP surface for frontend + backend + shared code
 - a realistic privacy-preserving workflow for internal systems
+
+## 5. Design-partner workflow loop notes
+
+When you do not yet have a publishable live customer receipt, the next-best public artifact is a set of **design-partner workflow loop notes** that stays explicit about what is anonymized.
+
+- Keep those notes **anonymized**.
+- Use **synthetic reproductions** or partner-approved summaries.
+- Exclude sensitive source, full prompts, and customer details.
+- Publish only the share-safe workflow evidence shape plus the outcome summary.
+
+The first public draft bundle lives under [`docs/benchmarks/2026-06-01-design-partner-workflow-loops/`](docs/benchmarks/2026-06-01-design-partner-workflow-loops/README.md). It is useful because it makes the workflow-proof target concrete, but it does **not** mean Madar already has five live design partners or a universal workflow win claim.
 
 ## Which proof to use
 

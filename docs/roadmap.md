@@ -21,6 +21,8 @@ These items already landed and are no longer part of the future roadmap:
 - [#245 — Plan and validate Madar rebrand migration](https://github.com/mohanagy/madar/issues/245)
 - [#236 — Add typestack/routing-controllers framework detector](https://github.com/mohanagy/madar/issues/236)
 - [#233 — Add answer-quality scoring to benchmark suite summaries](https://github.com/mohanagy/madar/issues/233)
+- [#425 — Run design-partner workflow loops and publish anonymized evidence](https://github.com/mohanagy/madar/issues/425) added **design-partner workflow loops** as **anonymized workflow notes** and synthetic reproductions under `docs/benchmarks/2026-06-01-design-partner-workflow-loops/`.
+- [#429 — Make federation a flagship multi-repo enterprise workflow](https://github.com/mohanagy/madar/issues/429) added a **synthetic federation receipt** for a **frontend/backend/shared** fixture so the flagship multi-repo enterprise workflow is reproducible without pretending it is already a broad benchmark.
 
 ## v0.26 — Runtime trust and routing precision
 
@@ -59,6 +61,7 @@ Focus: reduce repeated work across packs, compares, and longer agent sessions on
 
 Focus: make Madar easier to adopt, evaluate, and contribute to after the runtime and benchmark surfaces stop moving quickly.
 
+- Follow the first **design-partner workflow loops** bundle with stronger partner-approved receipts once the repo can replace some **anonymized workflow notes** with repeated public outcomes.
 - Refresh contributor-facing docs, examples, and onboarding after the v0.26-v0.29 work is stable.
 - Keep the near-term roadmap centered on runtime trust, answer quality, framework depth, and MCP/session efficiency before expanding into broader polish work.
 
@@ -66,6 +69,9 @@ Focus: make Madar easier to adopt, evaluate, and contribute to after the runtime
 
 - Python extraction now covers conservative FastAPI router composition/dependency semantics and first-pass Django URL-conf mapping, but broader language-parity work still stays outside the near-term roadmap.
 - Go first-pass support already shipped in [#234](https://github.com/mohanagy/madar/issues/234), so near-term work stays focused on TypeScript/Node depth instead of starting a new language track.
+- [#430 — Evaluate hosted dashboard for share-safe artifacts](https://github.com/mohanagy/madar/issues/430) stays parked until there is **explicit customer demand** beyond the current **local html report** path (`graph.html`, `GRAPH_REPORT.md`, `report.share-safe.json`). Any revisit must stay share-safe and keep the no-cloud-indexing assumption explicit.
+- [#432 — Explore plugin and distribution channels for agent ecosystems](https://github.com/mohanagy/madar/issues/432) stays parked until **proof/onboarding readiness** is stronger than the current shipped installer set. Near-term work should deepen current distribution channels first, keep the existing MCP Registry metadata bounded to the current local-first flow, treat broader **MCP directories** and listing pages as later leverage, and avoid heavy marketplace work before adoption proof exists.
+- [#431 — Decide language expansion after TypeScript/Node proof strengthens](https://github.com/mohanagy/madar/issues/431) keeps broader **language expansion** behind explicit **evidence gates**: stronger **TypeScript/Node proof**, language-specific benchmark or fixture evidence, and **no broad parity claim** before those receipts exist.
 
 ## Where to start
 

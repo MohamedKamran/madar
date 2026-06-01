@@ -2,6 +2,23 @@
 
 All notable changes to the TypeScript package will be documented in this file.
 
+## [0.27.7-next.1] - 2026-06-01
+
+### Fixed
+
+- **Implement compare validation is now safer and more transparent**: `compare --task implement` now discloses repo-local validation commands in the native-agent warning flow, supports a configurable `--validation-timeout`, aborts hung validation command process groups reliably, and safely handles targeted test paths with spaces, shell metacharacters, or repo-root flag-like names.
+- **Prerelease README links now stay on the published branch**: next-only docs links now target `blob/next`, and release hygiene rejects prerelease README links that drift back to `blob/main`.
+
+## [0.27.7-next.0] - 2026-06-01
+
+### Added
+
+- **Federation is now documented as a flagship multi-repo workflow proof**: Madar now ships a reproducible three-repo federation fixture plus a checked-in synthetic federation receipt and supporting docs so the enterprise/multi-repo workflow claim has a concrete local artifact without overstating the current implementation. Closes #429.
+
+### Changed
+
+- **The next-track roadmap docs are more decision-ready**: the `next` line now includes design-partner workflow loop drafts, plugin distribution-channel research, and the current language-expansion decision so the upcoming beta reflects the product direction already merged on `next`. Closes #425, #431, and #432.
+
 ## [0.27.6] - 2026-05-29
 
 ### Changed

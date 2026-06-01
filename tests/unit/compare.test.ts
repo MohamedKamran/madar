@@ -1223,7 +1223,7 @@ describe('compare runtime', () => {
   it('snapshots the full-profile native-agent prompt contract', () => {
     expect(buildNativeAgentPrompt('What is the cluster module?', 'full')).toMatchInlineSnapshot(`
       "Follow the Madar pack contract exactly.
-      Call context_pack first for explain or runtime questions before any raw file or broad repo search.
+      Call context_pack first for explain, review, impact, or runtime questions before any raw file or broad repo search.
       Inspect evidence.pack_confidence, evidence.coverage, evidence.agent_directive, missing_context, and recommended_first_read before deciding what to do next.
       If evidence.agent_directive is answer_from_pack, answer from the pack and stop without raw search.
       Allow at most one focused Madar follow-up before raw search when evidence.agent_directive is verify_one_targeted_file or explore_with_caution.
@@ -2955,6 +2955,24 @@ describe('compare runtime', () => {
     expect(JSON.stringify(shareSafeReport)).not.toContain(PROJECT_FIXTURE_ROOT)
     expect(readFileSync(join(COMPARE_OUTPUT_ROOT, outputTimestamp, 'baseline-answer.txt'), 'utf8')).toBe('baseline answer\n')
     expect(readFileSync(join(COMPARE_OUTPUT_ROOT, outputTimestamp, 'madar-answer.txt'), 'utf8')).toBe('madar answer\n')
+  })
+
+  it('rejects implement compare tasks outside native_agent mode', async () => {
+    const graph = makeGraph()
+    writeProjectFiles()
+    const graphPath = writeGraphFixture(graph)
+
+    await expect(
+      runCompareCommand({
+        graphPath,
+        question: 'implement session sliding expiration',
+        outputDir: COMPARE_OUTPUT_ROOT,
+        execTemplate: 'runner --prompt {prompt_file} --mode {mode} --out {output_file}',
+        baselineMode: 'full',
+        task: 'implement',
+        now: new Date('2026-04-24T19:30:00.000Z'),
+      }),
+    ).rejects.toThrow('implement task currently requires --baseline-mode native_agent')
   })
 
   it('adds deterministic answer-quality results to native_agent suite summaries when sibling quality gates exist', async () => {

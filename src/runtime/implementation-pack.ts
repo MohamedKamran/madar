@@ -14,6 +14,7 @@ import type {
 } from '../contracts/context-pack.js'
 import type { KnowledgeGraph } from '../contracts/graph.js'
 import type { TaskIntentKind } from '../contracts/task-intent.js'
+import { shellEscapeIfNeeded } from '../shared/shell.js'
 import { classifySourceDomain } from '../shared/source-discovery.js'
 import { lineNumberFromSourceLocation } from '../shared/source-location.js'
 import { relativizeSourceFile } from '../shared/source-path.js'
@@ -27,6 +28,11 @@ const PUBLIC_SURFACE_PATH_PATTERN = /(?:^|\/)(?:cli|stdio)(?:\/|$)|(?:^|\/)(?:ht
 const WORKFLOW_OWNER_PATTERN = /(?:service|controller|handler|worker|queue|job|workflow|orchestrator|planner|command|route|router|processor|consumer|producer|pipeline)/i
 const HELPER_PATTERN = /(?:helper|util|format|formatter|presenter|serializer|mapper|constant|type|schema|dto)/i
 const SIDE_EFFECT_PATTERN = /(?:save|create|update|delete|persist|write|enqueue|publish|dispatch|emit|send|store|cache|repository|queue|session|database|db)/i
+const RUNTIME_BOUNDARY_PATTERN = /(?:service|repository|repo|server(?:\s+action)?|actions?|worker|queue|job|processor|consumer|producer|persist|storage|database|db|prisma|session|cache)/i
+const CLIENT_SURFACE_PATTERN = /(?:client|component|view|presentational)/i
+const SHELL_SURFACE_PATH_PATTERN = /(?:^|\/)(?:app|main|root)\.[^/]+$|(?:^|\/)page\.[^/]+$|(?:^|\/)layout\.[^/]+$/i
+const WORKFLOW_OWNER_FOCUS_PATTERN = /(?:prisma|repository|persist|storage|database|db|server(?:\s+action)?|runtime\s+boundary|before\s+calling|keep\s+the\s+client\s+component\s+presentational)/i
+const EXPLICIT_CLIENT_TARGET_PATTERN = /(?:client(?:\s+component)?|presentational|ui|component)/i
 const WORKFLOW_EDGE_RELATIONS = new Set(['calls', 'controller_route', 'depends_on', 'imports_from', 'enqueues_job'])
 const SURFACE_ATTACHMENT_RELATIONS = new Set(['calls', 'controller_route', 'depends_on', 'imports_from'])
 const TEST_EDIT_PATTERN = /\b(?:add|update|modify|change|fix|write|edit|refactor|rename|remove)\b.{0,24}\b(?:test|tests|spec|specs|e2e|integration)\b|\b(?:test|tests|spec|specs|e2e|integration)\b.{0,24}\b(?:add|update|modify|change|fix|write|edit|refactor|rename|remove)\b/i
@@ -211,6 +217,107 @@ function helperLikeFileContext(
   reason?: string,
 ): boolean {
   return HELPER_PATTERN.test([path, ...labelOrSymbols, reason ?? ''].join(' '))
+}
+
+function fileContextText(
+  path: string,
+  labelOrSymbols: readonly string[],
+  reason?: string,
+): string {
+  return [path, ...labelOrSymbols, reason ?? ''].join(' ')
+}
+
+function promptPrefersWorkflowOwner(question?: string): boolean {
+  return typeof question === 'string' && WORKFLOW_OWNER_FOCUS_PATTERN.test(question)
+}
+
+function promptExplicitlyTargetsClientSurface(question?: string): boolean {
+  return typeof question === 'string' && EXPLICIT_CLIENT_TARGET_PATTERN.test(question)
+}
+
+function runtimeBoundaryLikeFileContext(
+  path: string,
+  labelOrSymbols: readonly string[],
+  _reason?: string,
+): boolean {
+  return RUNTIME_BOUNDARY_PATTERN.test(fileContextText(path, labelOrSymbols))
+}
+
+function shellLikeFileContext(
+  path: string,
+  labelOrSymbols: readonly string[],
+  reason?: string,
+): boolean {
+  if (runtimeBoundaryLikeFileContext(path, labelOrSymbols, reason)) {
+    return false
+  }
+
+  const joined = fileContextText(path, labelOrSymbols)
+  return SHELL_SURFACE_PATH_PATTERN.test(path)
+    || /\bcreateapp\b/i.test(joined)
+    || /\bpage\b/i.test(joined)
+    || /\blayout\b/i.test(joined)
+}
+
+function clientOnlyFileContext(
+  path: string,
+  labelOrSymbols: readonly string[],
+  reason?: string,
+): boolean {
+  return !runtimeBoundaryLikeFileContext(path, labelOrSymbols, reason)
+    && CLIENT_SURFACE_PATTERN.test(fileContextText(path, labelOrSymbols))
+}
+
+function supportingOnlyWorkflowContextReason(
+  path: string,
+  labelOrSymbols: readonly string[],
+  question?: string,
+  reason?: string,
+): string | null {
+  if (!promptPrefersWorkflowOwner(question)) {
+    return null
+  }
+
+  if (explicitlyTargetsPathOrSymbol(question, path, labelOrSymbols)) {
+    return null
+  }
+
+  if (clientOnlyFileContext(path, labelOrSymbols, reason) && !promptExplicitlyTargetsClientSurface(question)) {
+    return `Treat ${path} as supporting context first, not the default edit path, unless the prompt explicitly targets that client surface.`
+  }
+
+  if (shellLikeFileContext(path, labelOrSymbols, reason)) {
+    return `Treat ${path} as supporting context first, not the default edit path, unless the prompt explicitly targets that route or page shell.`
+  }
+
+  return null
+}
+
+function workflowIntentScoreAdjustment(
+  path: string,
+  labelOrSymbols: readonly string[],
+  question?: string,
+  reason?: string,
+): { delta: number; reasons: string[] } {
+  if (!promptPrefersWorkflowOwner(question)) {
+    return { delta: 0, reasons: [] }
+  }
+
+  const reasons: string[] = []
+  let delta = 0
+  const supportingOnlyReason = supportingOnlyWorkflowContextReason(path, labelOrSymbols, question, reason)
+
+  if (runtimeBoundaryLikeFileContext(path, labelOrSymbols, reason)) {
+    delta += 5
+    reasons.push('Task wording points toward the runtime/storage owner on the route/controller/service path.')
+  }
+
+  if (supportingOnlyReason) {
+    delta -= clientOnlyFileContext(path, labelOrSymbols, reason) ? 6 : 5.5
+    reasons.push(supportingOnlyReason)
+  }
+
+  return { delta, reasons }
 }
 
 function explicitlyTargetsPathOrSymbol(
@@ -671,6 +778,16 @@ function workflowCenters(
         entry.score += 0.5
         reasons.push(`Multiple direct matches converge in ${entry.path}.`)
       }
+      const intentAdjustment = workflowIntentScoreAdjustment(
+        entry.path,
+        [entry.label, ...entry.matched_symbols],
+        retrieval.question,
+        reasons[0],
+      )
+      entry.score += intentAdjustment.delta
+      for (const reason of intentAdjustment.reasons) {
+        pushUnique(reasons, entry.reasonSet, reason)
+      }
       const reason = [
         ...entry.phase_reasons,
         'Workflow-center promotion preferred this file as the owning workflow surface.',
@@ -702,8 +819,14 @@ function mergeLikelyEditFiles(
 ): ImplementationPackFileHint[] {
   const results: ImplementationPackFileHint[] = []
   const seen = new Set<string>()
-  const hasNonHelperWorkflowCenter = workflowCentersValue.some((center) => center.path
-    && !helperLikeFileContext(center.path, [center.label, ...(center.matched_symbols ?? [])], center.reason))
+  const hasPrimaryWorkflowCenter = workflowCentersValue.some((center) => center.path
+    && !helperLikeFileContext(center.path, [center.label, ...(center.matched_symbols ?? [])], center.reason)
+    && !supportingOnlyWorkflowContextReason(
+      center.path,
+      [center.label, ...(center.matched_symbols ?? [])],
+      question,
+      center.reason,
+    ))
   const starterByPath = new Map(
     starterFiles
       .filter((entry) => allowTestFiles || classifySourceDomain(entry.path, rootPath) !== 'test')
@@ -715,9 +838,16 @@ function mergeLikelyEditFiles(
       !center.path
       || seen.has(center.path)
       || (!allowTestFiles && classifySourceDomain(center.path, rootPath) === 'test')
-      || (hasNonHelperWorkflowCenter
+      || (hasPrimaryWorkflowCenter
         && helperLikeFileContext(center.path, [center.label, ...(center.matched_symbols ?? [])], center.reason)
         && !explicitlyTargetsPathOrSymbol(question, center.path, [center.label, ...(center.matched_symbols ?? [])]))
+      || (hasPrimaryWorkflowCenter
+        && supportingOnlyWorkflowContextReason(
+          center.path,
+          [center.label, ...(center.matched_symbols ?? [])],
+          question,
+          center.reason,
+        ))
     ) {
       continue
     }
@@ -744,9 +874,11 @@ function mergeLikelyEditFiles(
     if (
       seen.has(entry.path)
       || (!allowTestFiles && classifySourceDomain(entry.path, rootPath) === 'test')
-      || (hasNonHelperWorkflowCenter
+      || (hasPrimaryWorkflowCenter
         && helperLikeFileContext(entry.path, entry.matched_symbols, entry.reason)
         && !explicitlyTargetsPathOrSymbol(question, entry.path, entry.matched_symbols))
+      || (hasPrimaryWorkflowCenter
+        && supportingOnlyWorkflowContextReason(entry.path, entry.matched_symbols, question, entry.reason))
     ) {
       continue
     }
@@ -1204,7 +1336,7 @@ function readWorkspacePackageScripts(rootPath?: string): { scripts: PackageScrip
 function testCommandForScripts(scripts: PackageScripts, testFiles: readonly string[]): string[] {
   const commands: string[] = []
   if (testFiles.length > 0 && Object.hasOwn(scripts, 'test:run')) {
-    commands.push(`npm run test:run -- ${testFiles.slice(0, 5).join(' ')}`)
+    commands.push(`npm run test:run -- ${testFiles.slice(0, 5).map((path) => shellEscapeIfNeeded(prefixTestPathFlagLikeArg(path))).join(' ')}`)
   }
   if (Object.hasOwn(scripts, 'test:run')) {
     commands.push('npm run test:run')
@@ -1212,6 +1344,10 @@ function testCommandForScripts(scripts: PackageScripts, testFiles: readonly stri
     commands.push('npm run test')
   }
   return commands
+}
+
+function prefixTestPathFlagLikeArg(path: string): string {
+  return path.startsWith('-') ? `./${path}` : path
 }
 
 function validationCommands(rootPath: string | undefined, testFiles: readonly ImplementationPackFileHint[]): {
@@ -1262,6 +1398,8 @@ function cautionMessages(
   riskBoundaries: readonly ImplementationPackRiskBoundary[],
   validationWarnings: readonly string[],
   testFiles: readonly ImplementationPackFileHint[],
+  workflowCentersValue: readonly ContextPackWorkflowCenter[],
+  likelyEditFiles: readonly ImplementationPackFileHint[],
 ): string[] {
   const cautions: string[] = []
 
@@ -1276,6 +1414,21 @@ function cautionMessages(
   }
   if (testFiles.length === 0) {
     cautions.push('No related tests were retrieved; validate regression coverage manually.')
+  }
+  const editPaths = new Set(likelyEditFiles.map((entry) => entry.path))
+  for (const center of workflowCentersValue) {
+    if (!center.path || editPaths.has(center.path)) {
+      continue
+    }
+    const supportingOnlyReason = supportingOnlyWorkflowContextReason(
+      center.path,
+      [center.label, ...(center.matched_symbols ?? [])],
+      retrieval.question,
+      center.reason,
+    )
+    if (supportingOnlyReason) {
+      cautions.push(supportingOnlyReason)
+    }
   }
 
   return [...new Set([...cautions, ...validationWarnings])]
@@ -1370,7 +1523,14 @@ export function buildImplementationPackGuidance(
       risk_boundaries,
       contracts_and_public_surfaces,
     ),
-    cautions: cautionMessages(retrieval, risk_boundaries, validation.warnings, likely_test_files),
+    cautions: cautionMessages(
+      retrieval,
+      risk_boundaries,
+      validation.warnings,
+      likely_test_files,
+      workflow_centers,
+      likely_edit_files,
+    ),
     ...(runtimeContextIfRelevant ? { runtime_context_if_relevant: runtimeContextIfRelevant } : {}),
   }
 }

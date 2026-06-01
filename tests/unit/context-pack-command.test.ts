@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { ContextPackSelectionDiagnostics } from '../../src/contracts/context-pack.js'
 import { KnowledgeGraph } from '../../src/contracts/graph.js'
@@ -12,6 +12,51 @@ import { compactRetrieveResult, retrieveContext, type RetrieveResult } from '../
 import { estimateQueryTokens } from '../../src/runtime/serve.js'
 
 const tempFixtureRoots: string[] = []
+const repoGraphFixturePath = join(process.cwd(), 'out', 'graph.json')
+const repoBackendGraphFixturePath = join(process.cwd(), 'backend', 'out', 'graph.json')
+let createdRepoGraphFixture = false
+let createdRepoGraphFixtureDir = false
+let createdRepoBackendGraphFixture = false
+let createdRepoBackendGraphFixtureDir = false
+
+beforeAll(() => {
+  if (existsSync(repoGraphFixturePath)) {
+    // no-op
+  } else {
+    const repoGraphDir = dirname(repoGraphFixturePath)
+    if (!existsSync(repoGraphDir)) {
+      mkdirSync(repoGraphDir, { recursive: true })
+      createdRepoGraphFixtureDir = true
+    }
+    writeFileSync(repoGraphFixturePath, JSON.stringify({ fixture: true }))
+    createdRepoGraphFixture = true
+  }
+  if (existsSync(repoBackendGraphFixturePath)) {
+    return
+  }
+  const repoBackendGraphDir = dirname(repoBackendGraphFixturePath)
+  if (!existsSync(repoBackendGraphDir)) {
+    mkdirSync(repoBackendGraphDir, { recursive: true })
+    createdRepoBackendGraphFixtureDir = true
+  }
+  writeFileSync(repoBackendGraphFixturePath, JSON.stringify({ fixture: true }))
+  createdRepoBackendGraphFixture = true
+})
+
+afterAll(() => {
+  if (createdRepoGraphFixture) {
+    rmSync(repoGraphFixturePath, { force: true })
+  }
+  if (createdRepoGraphFixtureDir) {
+    rmSync(dirname(repoGraphFixturePath), { recursive: true, force: true })
+  }
+  if (createdRepoBackendGraphFixture) {
+    rmSync(repoBackendGraphFixturePath, { force: true })
+  }
+  if (createdRepoBackendGraphFixtureDir) {
+    rmSync(dirname(repoBackendGraphFixturePath), { recursive: true, force: true })
+  }
+})
 
 afterEach(() => {
   while (tempFixtureRoots.length > 0) {
@@ -160,6 +205,42 @@ function buildOversizedAnswerReadySchema() {
       confidence_reasons: ['all required evidence covered'],
       agent_directive: 'answer_from_pack' as const,
     },
+    governance: {
+      version: 1 as const,
+      surface: 'cli_pack' as const,
+      privacy_boundary: {
+        source_safe: true as const,
+        includes_prompt: false as const,
+        includes_source_content: false as const,
+        includes_answer_content: false as const,
+        includes_file_paths: false as const,
+      },
+      graph_freshness: {
+        graph_version: 'fixture-graph',
+        graph_modified_ms: 0,
+        graph_modified_at: new Date(0).toUTCString(),
+      },
+      request: {
+        task: 'explain' as const,
+        task_intent: 'explain' as const,
+        budget: 1500,
+        retrieval_strategy: 'slice-v1' as const,
+      },
+      directive: {
+        pack_confidence: 'high' as const,
+        coverage: 'complete' as const,
+        agent_directive: 'answer_from_pack' as const,
+        missing_phases: [],
+      },
+      follow_up: {
+        expandable_handle_count: 1,
+        expandable_evidence_classes: ['supporting'] as const,
+        expansion_task_kinds: ['explain'] as const,
+        preview_item_count: 2,
+        focus_file_count: 0,
+        focus_range_count: 16,
+      },
+    },
     workflow_centers: [
       { label: 'RuntimeController.handle', path: 'src/runtime/controller.ts', reason: 'controller entrypoint' },
       { label: 'RuntimeService.execute', path: 'src/runtime/service.ts', reason: 'service handoff' },
@@ -237,7 +318,6 @@ function buildOversizedAnswerReadySchema() {
     },
   }
 }
-
 function buildAnswerReadySelectionDiagnostics(): ContextPackSelectionDiagnostics {
   return {
     selection_strategy: 'value-per-token',
@@ -292,7 +372,6 @@ function buildAnswerReadySelectionDiagnostics(): ContextPackSelectionDiagnostics
     ],
   }
 }
-
 describe('context-pack-command', () => {
   it('preserves execution_slice for runtime-generation explain packs', async () => {
     const graph = buildRuntimeGenerationGraph()
@@ -454,7 +533,34 @@ describe('context-pack-command', () => {
       ],
       graph_signals: { god_nodes: [], bridge_nodes: [] },
       claims: [],
-      expandable: [],
+      expandable: [
+        {
+          kind: 'nodes',
+          handle_id: 'expand-idea-runtime',
+          evidence_class: 'supporting' as const,
+          count: 2,
+          preview: [
+            {
+              node_id: 'helper-status',
+              label: 'StatusBadge.render',
+              source_file: 'src/ideas/report-status.ts',
+            },
+          ],
+          follow_up: {
+            kind: 'context_pack' as const,
+            task_kind: 'explain' as const,
+            evidence_class: 'supporting' as const,
+            focus_files: ['src/ideas/report-status.ts', 'src/ideas/next-steps.ts'],
+            focus_ranges: [
+              {
+                source_file: 'src/ideas/report-status.ts',
+                start_line: 18,
+                end_line: 42,
+              },
+            ],
+          },
+        },
+      ],
       coverage: {
         required_evidence: ['primary', 'supporting', 'structural'] as const,
         semantic_required: ['implementation', 'structure'] as const,
@@ -571,6 +677,20 @@ describe('context-pack-command', () => {
         coverage?: string
         agent_directive?: string
       }
+      governance?: {
+        version?: number
+        surface?: string
+        privacy_boundary?: {
+          source_safe?: boolean
+        }
+        directive?: {
+          agent_directive?: string
+        }
+        follow_up?: {
+          expandable_handle_count?: number
+          preview_item_count?: number
+        }
+      }
       workflow_centers?: Array<{ path?: string; label?: string }>
       recommended_first_read?: Array<{ path?: string; label?: string }>
       negative_guidance?: string[]
@@ -581,6 +701,22 @@ describe('context-pack-command', () => {
       coverage: 'complete',
       agent_directive: 'answer_from_pack',
     }))
+    expect(payload.governance).toEqual(expect.objectContaining({
+      version: 1,
+      surface: 'cli_pack',
+      privacy_boundary: {
+        source_safe: true,
+      },
+      directive: expect.objectContaining({
+        agent_directive: 'answer_from_pack',
+      }),
+      follow_up: {
+        expandable_handle_count: 1,
+        preview_item_count: 1,
+      },
+    }))
+    expect(JSON.stringify(payload.governance)).not.toContain('How idea report is being generated')
+    expect(JSON.stringify(payload.governance)).not.toContain('src/ideas/')
     expect(payload.workflow_centers?.slice(0, 4)).toEqual([
       expect.objectContaining({
         path: 'src/ideas/controller.ts',
@@ -772,6 +908,9 @@ describe('context-pack-command', () => {
         execution_slice?: { side_effects?: unknown[] }
       }
       evidence?: { agent_directive?: string }
+      governance?: {
+        request?: { task_intent?: string; retrieval_strategy?: string }
+      }
       recommended_first_read?: Array<{ path?: string }>
     }
 
@@ -785,89 +924,14 @@ describe('context-pack-command', () => {
     expect(payload.pack?.slice?.selected_path_count).toBe(noisySelectedPaths.length)
     expect(payload.pack?.execution_slice?.side_effects).toBeUndefined()
     expect(payload.evidence?.agent_directive).toBe('answer_from_pack')
+    expect(payload.governance?.request).toEqual(expect.objectContaining({
+      task_intent: 'explain',
+      retrieval_strategy: 'slice-v1',
+    }))
     expect(payload.recommended_first_read?.map((entry) => entry.path)).toEqual([
       'src/ideas/controller.ts',
       'src/ideas/report-service.ts',
     ])
-  })
-
-  it('culls oversized answer-ready explain payloads to budget using ranking order and records the dropped nodes', () => {
-    const payload = buildAnswerReadyPackSchema(
-      buildOversizedAnswerReadySchema(),
-      1500,
-      buildAnswerReadySelectionDiagnostics(),
-    ) as {
-      serialized_budget?: { max_tokens?: number; token_count?: number; enforced?: boolean }
-      workflow_centers?: Array<{ label?: string }>
-      recommended_first_read?: Array<{ path?: string }>
-      pack?: {
-        answer_contract?: { required_elements?: string[] }
-        matched_nodes?: Array<{ node_id?: string }>
-        relationships?: Array<{ to_id?: string }>
-      }
-      routing?: {
-        warnings?: Array<{ kind?: string; detail?: { dropped_node_ids?: string[] } }>
-      }
-    }
-    const droppedNodeIds = payload.routing?.warnings
-      ?.find((entry) => entry.kind === 'pack_culled_to_budget')
-      ?.detail?.dropped_node_ids ?? []
-
-    expect(payload.serialized_budget).toEqual(expect.objectContaining({
-      max_tokens: 1500,
-      enforced: true,
-    }))
-    expect(payload.serialized_budget?.token_count).toBeLessThanOrEqual(1500)
-    expect(payload.workflow_centers?.map((entry) => entry.label)).toEqual([
-      'RuntimeController.handle',
-      'RuntimeService.execute',
-    ])
-    expect(payload.recommended_first_read?.map((entry) => entry.path)).toEqual([
-      'src/runtime/controller.ts',
-    ])
-    expect(payload.pack?.answer_contract?.required_elements).toEqual(['main_pipeline_phases'])
-    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).toContain('helper-low-1')
-    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).not.toContain('helper-low-2')
-    expect(droppedNodeIds).toContain('helper-low-2')
-    expect(droppedNodeIds).not.toContain('helper-low-1')
-    expect(payload.routing?.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'pack_culled_to_budget',
-        detail: expect.objectContaining({
-          dropped_node_ids: expect.arrayContaining(['helper-low-2']),
-        }),
-      }),
-    ]))
-  })
-
-  it('downgrades pack confidence when budget culling must drop workflow-spine nodes', () => {
-    const payload = buildAnswerReadyPackSchema(
-      buildOversizedAnswerReadySchema(),
-      850,
-      buildAnswerReadySelectionDiagnostics(),
-    ) as {
-      serialized_budget?: { token_count?: number; enforced?: boolean }
-      evidence?: {
-        pack_confidence?: string
-        agent_directive?: string
-        confidence_reasons?: string[]
-      }
-      pack?: {
-        matched_nodes?: Array<{ node_id?: string }>
-      }
-    }
-
-    expect(payload.serialized_budget?.enforced).toBe(true)
-    expect(payload.serialized_budget?.token_count).toBeLessThanOrEqual(850)
-    expect(payload.pack?.matched_nodes?.map((entry) => entry.node_id)).not.toEqual(expect.arrayContaining([
-      'workflow-controller',
-      'workflow-service',
-    ]))
-    expect(payload.evidence).toEqual(expect.objectContaining({
-      pack_confidence: 'low',
-      agent_directive: 'explore_with_caution',
-      confidence_reasons: expect.arrayContaining(['budget too tight for workflow spine']),
-    }))
   })
 
   it('keeps debug-heavy path details when pack verbose mode is explicitly requested', async () => {
