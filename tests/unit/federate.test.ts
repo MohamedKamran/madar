@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { federate } from '../../src/pipeline/federate.js'
@@ -73,5 +73,33 @@ describe('federate', () => {
 
   it('throws on empty input', () => {
     expect(() => federate([])).toThrow('At least one graph path is required')
+  })
+
+  it('reproduces the checked-in three-repo federation receipt', () => {
+    withTempDir((dir) => {
+      const frontendGraph = resolve('tests/fixtures/federation-flagship/frontend/out/graph.json')
+      const backendGraph = resolve('tests/fixtures/federation-flagship/backend/out/graph.json')
+      const sharedGraph = resolve('tests/fixtures/federation-flagship/shared/out/graph.json')
+      const receipt = JSON.parse(
+        readFileSync(resolve('docs/benchmarks/2026-06-01-federation-flagship/federation-receipt.json'), 'utf8'),
+      ) as {
+        repos: string[]
+        totalNodes: number
+        totalEdges: number
+        crossRepoEdges: number
+        communityCount: number
+      }
+
+      const outputDir = join(dir, 'federated')
+      const result = federate([frontendGraph, backendGraph, sharedGraph], { outputDir })
+
+      expect(result.repos).toEqual(receipt.repos)
+      expect(result.totalNodes).toBe(receipt.totalNodes)
+      expect(result.totalEdges).toBe(receipt.totalEdges)
+      expect(result.crossRepoEdges).toBe(receipt.crossRepoEdges)
+      expect(result.communityCount).toBe(receipt.communityCount)
+      expect(existsSync(result.graphPath)).toBe(true)
+      expect(existsSync(result.reportPath)).toBe(true)
+    })
   })
 })
