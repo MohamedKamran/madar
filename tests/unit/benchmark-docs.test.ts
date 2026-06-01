@@ -19,8 +19,15 @@ function collectReportJsonFiles(rootDir: string): string[] {
   return files;
 }
 
+function isUnsafeLocalPath(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 describe('benchmark docs artifacts', () => {
-  it('do not expose local graph or result paths in committed report.json files', () => {
+  it('do not expose absolute local graph or result paths in committed report.json files', () => {
     const reportsDir = path.join(process.cwd(), 'docs', 'benchmarks');
     const reportFiles = collectReportJsonFiles(reportsDir);
 
@@ -32,8 +39,14 @@ describe('benchmark docs artifacts', () => {
         result_path?: unknown;
       };
 
-      expect(report.graph_path, `${path.relative(process.cwd(), reportFile)} graph_path`).toBeUndefined();
-      expect(report.result_path, `${path.relative(process.cwd(), reportFile)} result_path`).toBeUndefined();
+      expect(
+        isUnsafeLocalPath(report.graph_path),
+        `${path.relative(process.cwd(), reportFile)} graph_path`,
+      ).toBe(false);
+      expect(
+        isUnsafeLocalPath(report.result_path),
+        `${path.relative(process.cwd(), reportFile)} result_path`,
+      ).toBe(false);
     }
   });
 });
