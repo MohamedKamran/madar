@@ -1,12 +1,14 @@
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { runContextPackCommand } from '../../src/infrastructure/context-pack-command.js'
 import { runContextPromptCommand } from '../../src/infrastructure/context-prompt-command.js'
 import { runDoctorCommand, runStatusCommand } from '../../src/infrastructure/doctor.js'
+import { generateGraph } from '../../src/infrastructure/generate.js'
 import { runHandoffCommand } from '../../src/infrastructure/handoff-command.js'
 import { handleStdioRequest } from '../../src/runtime/stdio-server.js'
 
@@ -21,6 +23,16 @@ interface FreshnessFixture {
   root: string
   graphPath: string
   generatedAt: string
+}
+
+interface GitFreshnessFixture {
+  root: string
+  graphPath: string
+  authPath: string
+  sessionPath: string
+  paymentPath: string
+  routesPath: string
+  sourceTime: Date
 }
 
 afterEach(() => {
@@ -182,13 +194,118 @@ function createFreshnessFixture(state: FixtureState): FreshnessFixture {
   }
 
   if (state === 'shared_modified') {
-    utimesSync(authPath, modifiedTime, modifiedTime)
+    utimesSync(routesPath, modifiedTime, modifiedTime)
   }
 
   return {
     root,
     graphPath,
     generatedAt: graphTime.toISOString(),
+  }
+}
+
+function git(root: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  }).trim()
+}
+
+function setFileContentPreservingMtime(path: string, content: string, sourceTime: Date): void {
+  writeFileSync(path, content, 'utf8')
+  utimesSync(path, sourceTime, sourceTime)
+}
+
+function createGitFreshnessFixture(options: {
+  buildDirtyFile?: 'auth'
+  authRelativePath?: string
+} = {}): GitFreshnessFixture {
+  const root = mkdtempSync(join(tmpdir(), 'madar-git-freshness-'))
+  sandboxRoots.push(root)
+
+  const authPath = join(root, options.authRelativePath ?? 'src/auth.ts')
+  const sessionPath = join(root, 'src', 'session.ts')
+  const paymentPath = join(root, 'src', 'payment.ts')
+  const routesPath = join(root, 'src', 'routes.ts')
+  const sourceTime = new Date('2024-01-01T00:00:00.000Z')
+
+  mkdirSync(join(root, 'src'), { recursive: true })
+  mkdirSync(dirname(authPath), { recursive: true })
+  writeFileSync(
+    authPath,
+    [
+      'export function AuthService() {',
+      '  return issueSession()',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    sessionPath,
+    [
+      'export function issueSession() {',
+      '  return "ok"',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    paymentPath,
+    [
+      'export function chargeCard() {',
+      '  return "charged"',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+  writeFileSync(
+    routesPath,
+    [
+      'export function registerAuthRoute() {',
+      '  return AuthService()',
+      '}',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+
+  git(root, ['init'])
+  git(root, ['config', 'user.email', 'madar@example.com'])
+  git(root, ['config', 'user.name', 'Madar Tests'])
+  git(root, ['add', '.'])
+  git(root, ['commit', '-m', 'initial'])
+
+  for (const path of [authPath, sessionPath, paymentPath, routesPath]) {
+    utimesSync(path, sourceTime, sourceTime)
+  }
+
+  if (options.buildDirtyFile === 'auth') {
+    setFileContentPreservingMtime(
+      authPath,
+      [
+        'export function AuthService() {',
+        '  return issueSession().toUpperCase()',
+        '}',
+        '',
+      ].join('\n'),
+      sourceTime,
+    )
+  }
+
+  const result = generateGraph(root)
+
+  return {
+    root,
+    graphPath: result.graphPath,
+    authPath,
+    sessionPath,
+    paymentPath,
+    routesPath,
+    sourceTime,
   }
 }
 
@@ -270,6 +387,193 @@ describe('freshness surfaces', () => {
     }))
   })
 
+  it('tracks selected-context drift from git dirty files even when source mtimes stay older than the graph', async () => {
+    const freshnessRuntime = await import('../../src/runtime/freshness.js') as Record<string, unknown>
+    const analyzeGraphContextFreshness = freshnessRuntime.analyzeGraphContextFreshness as
+      | ((graphPath: string, graph?: unknown, selection?: { selected_source_files?: readonly string[] }) => {
+          status: string
+          selected_context_status: string
+          changed_source_count: number
+          changed_selected_context_count: number
+          changed_outside_selected_context_count: number
+        })
+      | undefined
+
+    expect(analyzeGraphContextFreshness).toBeTypeOf('function')
+
+    const fixture = createGitFreshnessFixture()
+    setFileContentPreservingMtime(
+      fixture.authPath,
+      [
+        'export function AuthService() {',
+        '  return issueSession() + "-stale"',
+        '}',
+        '',
+      ].join('\n'),
+      fixture.sourceTime,
+    )
+
+    expect(analyzeGraphContextFreshness!(fixture.graphPath, undefined, {
+      selected_source_files: [fixture.authPath, fixture.sessionPath],
+    })).toEqual(expect.objectContaining({
+      status: 'possibly_stale',
+      selected_context_status: 'possibly_stale',
+      changed_source_count: 1,
+      changed_selected_context_count: 1,
+      changed_outside_selected_context_count: 0,
+    }))
+  })
+
+  it('tracks git dirty files whose paths include spaces', async () => {
+    const freshnessRuntime = await import('../../src/runtime/freshness.js') as Record<string, unknown>
+    const analyzeGraphContextFreshness = freshnessRuntime.analyzeGraphContextFreshness as
+      | ((graphPath: string, graph?: unknown, selection?: { selected_source_files?: readonly string[] }) => {
+          status: string
+          selected_context_status: string
+          changed_source_count: number
+          changed_selected_context_count: number
+          changed_outside_selected_context_count: number
+        })
+      | undefined
+
+    expect(analyzeGraphContextFreshness).toBeTypeOf('function')
+
+    const fixture = createGitFreshnessFixture({ authRelativePath: 'src/auth service.ts' })
+    setFileContentPreservingMtime(
+      fixture.authPath,
+      [
+        'export function AuthService() {',
+        '  return issueSession() + "-spaced"',
+        '}',
+        '',
+      ].join('\n'),
+      fixture.sourceTime,
+    )
+
+    expect(analyzeGraphContextFreshness!(fixture.graphPath, undefined, {
+      selected_source_files: [fixture.authPath, fixture.sessionPath],
+    })).toEqual(expect.objectContaining({
+      status: 'possibly_stale',
+      selected_context_status: 'possibly_stale',
+      changed_source_count: 1,
+      changed_selected_context_count: 1,
+      changed_outside_selected_context_count: 0,
+    }))
+  })
+
+  it('tracks unrelated git dirty files outside the selected context even when source mtimes stay older than the graph', async () => {
+    const freshnessRuntime = await import('../../src/runtime/freshness.js') as Record<string, unknown>
+    const analyzeGraphContextFreshness = freshnessRuntime.analyzeGraphContextFreshness as
+      | ((graphPath: string, graph?: unknown, selection?: { selected_source_files?: readonly string[] }) => {
+          status: string
+          selected_context_status: string
+          changed_source_count: number
+          changed_selected_context_count: number
+          changed_outside_selected_context_count: number
+        })
+      | undefined
+
+    expect(analyzeGraphContextFreshness).toBeTypeOf('function')
+
+    const fixture = createGitFreshnessFixture()
+    setFileContentPreservingMtime(
+      fixture.paymentPath,
+      [
+        'export function chargeCard() {',
+        '  return "charged-again"',
+        '}',
+        '',
+      ].join('\n'),
+      fixture.sourceTime,
+    )
+
+    expect(analyzeGraphContextFreshness!(fixture.graphPath, undefined, {
+      selected_source_files: [fixture.authPath, fixture.sessionPath],
+    })).toEqual(expect.objectContaining({
+      status: 'partially_stale',
+      selected_context_status: 'fresh',
+      changed_source_count: 1,
+      changed_selected_context_count: 0,
+      changed_outside_selected_context_count: 1,
+    }))
+  })
+
+  it('tracks git commit drift after build even when committed file mtimes stay older than the graph', async () => {
+    const freshnessRuntime = await import('../../src/runtime/freshness.js') as Record<string, unknown>
+    const analyzeGraphContextFreshness = freshnessRuntime.analyzeGraphContextFreshness as
+      | ((graphPath: string, graph?: unknown, selection?: { selected_source_files?: readonly string[] }) => {
+          status: string
+          selected_context_status: string
+          changed_source_count: number
+          changed_selected_context_count: number
+          changed_outside_selected_context_count: number
+        })
+      | undefined
+
+    expect(analyzeGraphContextFreshness).toBeTypeOf('function')
+
+    const fixture = createGitFreshnessFixture()
+    setFileContentPreservingMtime(
+      fixture.paymentPath,
+      [
+        'export function chargeCard() {',
+        '  return "committed-change"',
+        '}',
+        '',
+      ].join('\n'),
+      fixture.sourceTime,
+    )
+    git(fixture.root, ['add', 'src/payment.ts'])
+    git(fixture.root, ['commit', '-m', 'update payment'])
+
+    expect(analyzeGraphContextFreshness!(fixture.graphPath, undefined, {
+      selected_source_files: [fixture.authPath, fixture.sessionPath],
+    })).toEqual(expect.objectContaining({
+      status: 'partially_stale',
+      selected_context_status: 'fresh',
+      changed_source_count: 1,
+      changed_selected_context_count: 0,
+      changed_outside_selected_context_count: 1,
+    }))
+  })
+
+  it('tracks additional edits to a file that was already dirty when the graph was built', async () => {
+    const freshnessRuntime = await import('../../src/runtime/freshness.js') as Record<string, unknown>
+    const analyzeGraphContextFreshness = freshnessRuntime.analyzeGraphContextFreshness as
+      | ((graphPath: string, graph?: unknown, selection?: { selected_source_files?: readonly string[] }) => {
+          status: string
+          selected_context_status: string
+          changed_source_count: number
+          changed_selected_context_count: number
+          changed_outside_selected_context_count: number
+        })
+      | undefined
+
+    expect(analyzeGraphContextFreshness).toBeTypeOf('function')
+
+    const fixture = createGitFreshnessFixture({ buildDirtyFile: 'auth' })
+    setFileContentPreservingMtime(
+      fixture.authPath,
+      [
+        'export function AuthService() {',
+        '  return issueSession().toUpperCase() + "-again"',
+        '}',
+        '',
+      ].join('\n'),
+      fixture.sourceTime,
+    )
+
+    expect(analyzeGraphContextFreshness!(fixture.graphPath, undefined, {
+      selected_source_files: [fixture.authPath, fixture.sessionPath],
+    })).toEqual(expect.objectContaining({
+      status: 'possibly_stale',
+      selected_context_status: 'possibly_stale',
+      changed_source_count: 1,
+      changed_selected_context_count: 1,
+      changed_outside_selected_context_count: 0,
+    }))
+  })
+
   it('exposes graph freshness in pack, prompt, handoff, and MCP context_pack outputs', async () => {
     const fixture = createFreshnessFixture('modified')
 
@@ -333,7 +637,6 @@ describe('freshness surfaces', () => {
     expect(packJson.governance?.graph_freshness).toEqual(expect.objectContaining({
       status: 'possibly_stale',
       selected_context_status: 'possibly_stale',
-      graph_path: expect.stringMatching(OUT_GRAPH_PATH_PATTERN),
       generated_at: fixture.generatedAt,
       madar_version: PACKAGE_VERSION.version,
       indexed_file_count: 3,
@@ -345,6 +648,7 @@ describe('freshness surfaces', () => {
     }))
     expect(packText).toContain('Graph freshness: possibly stale')
     expect(packText).toContain('Selected context: possibly stale')
+    expect(packText).not.toContain('Graph source:')
     expect(packText).toContain('Changed since graph: 1 source file')
     expect(packText).toContain('Changed relevant to selected context: 1 source file')
     expect(packText).toContain('Recommended: Run `madar generate .`')
