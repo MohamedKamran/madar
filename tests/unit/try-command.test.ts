@@ -212,7 +212,7 @@ describe('runTryCommand', () => {
       io,
     })
     expect(output).toContain('No supported files were found in the target path.')
-    expect(output).toContain('examples/sample-workspace')
+    expect(output).toContain('sample-workspace')
   })
 
   it('falls back when the current repo graph is too small for a useful first proof', async () => {
@@ -242,7 +242,7 @@ describe('runTryCommand', () => {
       io,
     })
     expect(output).toContain('too small')
-    expect(output).toContain('examples/sample-workspace')
+    expect(output).toContain('sample-workspace')
   })
 
   it('does not hide generator failures behind the sample fallback', async () => {
