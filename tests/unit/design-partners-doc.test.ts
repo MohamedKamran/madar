@@ -29,6 +29,7 @@ describe('design partner program docs', () => {
     expect(template).toContain('design-partner')
     expect(template).toContain('repo_size_bucket')
     expect(template).toContain('framework')
+    expect(template).toContain('description: "Example: NestJS + Prisma, Next.js app router, Express API, monorepo service + web."')
     expect(template).toContain('agent')
     expect(template).toContain('task_type')
     expect(template).toContain('baseline_commands')
