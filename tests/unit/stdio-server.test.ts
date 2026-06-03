@@ -993,6 +993,113 @@ describe('stdio runtime', () => {
     }
   })
 
+  it('records opt-in context_pack telemetry for MCP success and failure without source-sensitive payloads', async () => {
+    const root = createGraphFixtureRoot()
+    const previousEnv = {
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+      MADAR_ENABLE_TELEMETRY: process.env.MADAR_ENABLE_TELEMETRY,
+      MADAR_DISABLE_TELEMETRY: process.env.MADAR_DISABLE_TELEMETRY,
+      DO_NOT_TRACK: process.env.DO_NOT_TRACK,
+      CI: process.env.CI,
+    }
+
+    try {
+      const graphPath = join(root, 'graph.json')
+      const configRoot = join(root, 'xdg-config')
+      const cacheRoot = join(root, 'xdg-cache')
+      mkdirSync(configRoot, { recursive: true })
+      mkdirSync(cacheRoot, { recursive: true })
+      process.env.XDG_CONFIG_HOME = configRoot
+      process.env.XDG_CACHE_HOME = cacheRoot
+      process.env.MADAR_ENABLE_TELEMETRY = '1'
+      delete process.env.MADAR_DISABLE_TELEMETRY
+      delete process.env.DO_NOT_TRACK
+      delete process.env.CI
+
+      const success = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 301,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            prompt: 'How does auth reach transport?',
+            budget: 1200,
+          },
+        },
+      }))
+      const failure = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 302,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            budget: 1200,
+          },
+        },
+      }))
+
+      expect(success?.error).toBeUndefined()
+      expect(failure?.error?.message).toContain('context_pack requires a string prompt parameter')
+
+      const spool = JSON.parse(readFileSync(join(cacheRoot, 'madar', 'telemetry-events.json'), 'utf8')) as {
+        schema_version: number
+        events: Array<Record<string, unknown>>
+      }
+      expect(spool).toEqual({
+        schema_version: 2,
+        events: [
+          expect.objectContaining({
+            command: 'context_pack',
+            stage: 'succeeded',
+            repo_size_bucket: '1-24',
+            graph_size_bucket: '1-99',
+          }),
+          expect.objectContaining({
+            command: 'context_pack',
+            stage: 'failed',
+            failure_bucket: 'invalid_params',
+          }),
+        ],
+      })
+      const serialized = JSON.stringify(spool)
+      expect(serialized).not.toContain('How does auth reach transport?')
+      expect(serialized).not.toContain('auth.ts')
+    } finally {
+      if (previousEnv.XDG_CONFIG_HOME === undefined) {
+        delete process.env.XDG_CONFIG_HOME
+      } else {
+        process.env.XDG_CONFIG_HOME = previousEnv.XDG_CONFIG_HOME
+      }
+      if (previousEnv.XDG_CACHE_HOME === undefined) {
+        delete process.env.XDG_CACHE_HOME
+      } else {
+        process.env.XDG_CACHE_HOME = previousEnv.XDG_CACHE_HOME
+      }
+      if (previousEnv.MADAR_ENABLE_TELEMETRY === undefined) {
+        delete process.env.MADAR_ENABLE_TELEMETRY
+      } else {
+        process.env.MADAR_ENABLE_TELEMETRY = previousEnv.MADAR_ENABLE_TELEMETRY
+      }
+      if (previousEnv.MADAR_DISABLE_TELEMETRY === undefined) {
+        delete process.env.MADAR_DISABLE_TELEMETRY
+      } else {
+        process.env.MADAR_DISABLE_TELEMETRY = previousEnv.MADAR_DISABLE_TELEMETRY
+      }
+      if (previousEnv.DO_NOT_TRACK === undefined) {
+        delete process.env.DO_NOT_TRACK
+      } else {
+        process.env.DO_NOT_TRACK = previousEnv.DO_NOT_TRACK
+      }
+      if (previousEnv.CI === undefined) {
+        delete process.env.CI
+      } else {
+        process.env.CI = previousEnv.CI
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('exposes context-pack and context-prompt MCP flows with reusable prompt sessions', async () => {
     const root = createGraphFixtureRoot()
     try {
@@ -1337,6 +1444,98 @@ describe('stdio runtime', () => {
           matched_nodes: expect.any(Array),
         }),
       }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('recomputes scoped freshness for cached explain context_pack hits before returning', async () => {
+    const root = createGraphFixtureRoot()
+    try {
+      const graphPath = join(root, 'graph.json')
+      const sessionState = {
+        logLevel: 'info' as const,
+        subscribedResourceUris: new Set<string>(),
+        resourceVersions: new Map<string, string>(),
+        resourceListSignature: null,
+      }
+
+      const first = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            prompt: 'How does AuthService reach Transport?',
+            task: 'explain',
+            budget: 1,
+          },
+        },
+      }, sessionState))
+
+      const firstPayload = JSON.parse((first?.result as { content: Array<{ text: string }> }).content[0]!.text)
+      expect(firstPayload.cache).toEqual(expect.objectContaining({ status: 'miss' }))
+
+      writeFileSync(join(root, 'client.ts'), 'export class HttpClient {\n  request() {\n    return new Transport()\n  }\n  refresh() {\n    return true\n  }\n}\n', 'utf8')
+
+      const second = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            prompt: 'How does AuthService reach Transport?',
+            task: 'explain',
+            budget: 1,
+          },
+        },
+      }, sessionState))
+
+      const secondPayload = JSON.parse((second?.result as { content: Array<{ text: string }> }).content[0]!.text)
+      expect(secondPayload.cache).toEqual(expect.objectContaining({ status: 'hit' }))
+      expect(secondPayload.governance.graph_freshness).toEqual(expect.objectContaining({
+        status: 'possibly_stale',
+        selected_context_status: 'possibly_stale',
+        changed_selected_context_count: 1,
+      }))
+
+      const strict = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            prompt: 'How does AuthService reach Transport?',
+            task: 'explain',
+            budget: 1,
+            require_fresh_context: true,
+          },
+        },
+      }, sessionState))
+      expect((strict as { error?: { message?: string } }).error?.message).toMatch(/selected context/i)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects require_fresh_context for review context_pack requests instead of ignoring it', async () => {
+    const root = createGraphFixtureRoot()
+    try {
+      const graphPath = join(root, 'graph.json')
+      const response = await Promise.resolve(handleStdioRequest(graphPath, {
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'context_pack',
+          arguments: {
+            prompt: 'review current diff',
+            task: 'review',
+            require_fresh_context: true,
+          },
+        },
+      }))
+
+      expect((response as { error?: { message?: string } }).error?.message).toMatch(/require_fresh_context.*review/i)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

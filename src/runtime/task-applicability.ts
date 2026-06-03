@@ -356,198 +356,194 @@ export function formatTaskApplicabilityDebugMessage(classification: TaskApplicab
   return `Skipped Madar: task is ${TASK_APPLICABILITY_REASON_LABELS[classification.reason]}, not local codebase context.`
 }
 
-export function buildPromptApplicabilityHookCommand(
+export function buildPromptApplicabilityHookScript(
   matchPayloadJson: string,
   hookEventName: string,
 ): string {
-  const b64MatchPayload = Buffer.from(matchPayloadJson).toString('base64')
-  const b64HookConfig = Buffer.from(JSON.stringify(HOOK_CONFIG)).toString('base64')
-  const source = `
-const fs = require('fs');
-const config = JSON.parse(Buffer.from('${b64HookConfig}', 'base64').toString('utf8'));
-const matchPayload = Buffer.from('${b64MatchPayload}', 'base64').toString('utf8');
-const filePathRe = /(?:^|\\s)(?:[\\w@./-]+\\/)*[\\w./@-]+\\.[A-Za-z]{1,8}(?=\\b|$)/i;
-const urlRe = /https?:\\/\\/\\S+/i;
-const githubProjectUrlRe = /https?:\\/\\/github\\.com\\/.*\\/projects\\/\\d+/i;
-const packageRegistryUrlRe = /https?:\\/\\/(?:www\\.)?(?:npmjs\\.com|socket\\.dev|snyk\\.io|packagephobia\\.com)\\//i;
-let input = '';
+  return `const fs = require('fs')
+
+const config = ${JSON.stringify(HOOK_CONFIG, null, 2)}
+const matchPayload = ${JSON.stringify(matchPayloadJson)}
+const hookEventName = ${JSON.stringify(hookEventName)}
+const filePathRe = ${FILE_PATH_RE}
+const urlRe = ${URL_RE}
+const githubProjectUrlRe = ${GITHUB_PROJECT_URL_RE}
+const packageRegistryUrlRe = ${PACKAGE_REGISTRY_URL_RE}
+let input = ''
 
 function normalizePrompt(prompt) {
   return String(prompt || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
-    .replace(/\\s+/g, ' ');
+    .replace(/\\s+/g, ' ')
 }
 
 function containsTerm(normalizedPrompt, term) {
-  const normalizedTerm = normalizePrompt(term);
+  const normalizedTerm = normalizePrompt(term)
   if (!normalizedPrompt || !normalizedTerm) {
-    return false;
+    return false
   }
 
-  return (' ' + normalizedPrompt + ' ').includes(' ' + normalizedTerm + ' ');
+  return \` \${normalizedPrompt} \`.includes(\` \${normalizedTerm} \`)
 }
 
 function matchTerms(normalizedPrompt, terms) {
-  return [...new Set(terms.map(normalizePrompt).filter((term) => containsTerm(normalizedPrompt, term)))].sort();
+  return [...new Set(terms.map(normalizePrompt).filter((term) => containsTerm(normalizedPrompt, term)))].sort()
 }
 
 function hasLocalCodeCue(prompt, normalizedPrompt) {
-  const matchedTerms = matchTerms(normalizedPrompt, config.local_code_terms);
-  const hasFilePath = filePathRe.test(prompt);
+  const matchedTerms = matchTerms(normalizedPrompt, config.local_code_terms)
+  const hasFilePath = filePathRe.test(prompt)
   return {
     detected: matchedTerms.length > 0 || hasFilePath,
     matched_terms: hasFilePath ? [...new Set([...matchedTerms, 'file path'])].sort() : matchedTerms,
-  };
+  }
 }
 
 function negativeClassification(prompt, normalizedPrompt) {
   if (githubProjectUrlRe.test(prompt)) {
-    return { reason: 'github_project', matched_terms: ['github project url'] };
+    return { reason: 'github_project', matched_terms: ['github project url'] }
   }
 
-  const githubProjectTerms = matchTerms(normalizedPrompt, config.github_project_terms);
+  const githubProjectTerms = matchTerms(normalizedPrompt, config.github_project_terms)
   if (githubProjectTerms.length > 0) {
-    return { reason: 'github_project', matched_terms: githubProjectTerms };
+    return { reason: 'github_project', matched_terms: githubProjectTerms }
   }
 
   if (packageRegistryUrlRe.test(prompt)) {
-    return { reason: 'package_registry', matched_terms: ['package registry url'] };
+    return { reason: 'package_registry', matched_terms: ['package registry url'] }
   }
 
-  const packageRegistryTerms = matchTerms(normalizedPrompt, config.package_registry_terms);
+  const packageRegistryTerms = matchTerms(normalizedPrompt, config.package_registry_terms)
   if (packageRegistryTerms.length > 0) {
-    return { reason: 'package_registry', matched_terms: packageRegistryTerms };
+    return { reason: 'package_registry', matched_terms: packageRegistryTerms }
   }
 
-  const authSetupTerms = matchTerms(normalizedPrompt, config.auth_setup_terms);
+  const authSetupTerms = matchTerms(normalizedPrompt, config.auth_setup_terms)
   if (authSetupTerms.length > 0) {
-    return { reason: 'auth_setup', matched_terms: authSetupTerms };
+    return { reason: 'auth_setup', matched_terms: authSetupTerms }
   }
 
-  const marketingTerms = matchTerms(normalizedPrompt, config.marketing_copy_terms);
+  const marketingTerms = matchTerms(normalizedPrompt, config.marketing_copy_terms)
   if (marketingTerms.length > 0) {
-    return { reason: 'marketing_copy', matched_terms: marketingTerms };
+    return { reason: 'marketing_copy', matched_terms: marketingTerms }
   }
 
   if (urlRe.test(prompt)) {
-    return { reason: 'external_url', matched_terms: ['external url'] };
+    return { reason: 'external_url', matched_terms: ['external url'] }
   }
 
-  const researchTerms = matchTerms(normalizedPrompt, config.general_research_terms);
-  if (researchTerms.length > 0) {
-    return { reason: 'general_research', matched_terms: researchTerms };
+  const generalResearchTerms = matchTerms(normalizedPrompt, config.general_research_terms)
+  if (generalResearchTerms.length > 0) {
+    return { reason: 'general_research', matched_terms: generalResearchTerms }
   }
 
-  return null;
+  return null
 }
 
 function localClassification(prompt, normalizedPrompt) {
-  const localCodeCue = hasLocalCodeCue(prompt, normalizedPrompt);
+  const localCodeCue = hasLocalCodeCue(prompt, normalizedPrompt)
 
-  const implementTerms = matchTerms(normalizedPrompt, config.implement_terms);
+  const implementTerms = matchTerms(normalizedPrompt, config.implement_terms)
   if (implementTerms.length > 0) {
-    return { reason: 'implement', matched_terms: implementTerms };
+    return { reason: 'implement', matched_terms: implementTerms }
   }
 
-  const debugTerms = matchTerms(normalizedPrompt, config.debug_terms);
+  const debugTerms = matchTerms(normalizedPrompt, config.debug_terms)
   if (debugTerms.length > 0 && localCodeCue.detected) {
-    return { reason: 'debug', matched_terms: [...new Set([...debugTerms, ...localCodeCue.matched_terms])].sort() };
+    return { reason: 'debug', matched_terms: [...new Set([...debugTerms, ...localCodeCue.matched_terms])].sort() }
   }
 
-  const testTerms = matchTerms(normalizedPrompt, config.test_terms);
+  const testTerms = matchTerms(normalizedPrompt, config.test_terms)
   if (testTerms.length > 0) {
-    return { reason: 'test', matched_terms: testTerms };
+    return { reason: 'test', matched_terms: testTerms }
   }
 
-  const reviewTerms = matchTerms(normalizedPrompt, config.review_terms);
+  const reviewTerms = matchTerms(normalizedPrompt, config.review_terms)
   if (reviewTerms.length > 0 && localCodeCue.detected) {
-    return { reason: 'review', matched_terms: [...new Set([...reviewTerms, ...localCodeCue.matched_terms])].sort() };
+    return { reason: 'review', matched_terms: [...new Set([...reviewTerms, ...localCodeCue.matched_terms])].sort() }
   }
 
-  const refactorTerms = matchTerms(normalizedPrompt, config.refactor_terms);
+  const refactorTerms = matchTerms(normalizedPrompt, config.refactor_terms)
   if (refactorTerms.length > 0) {
-    return { reason: 'refactor', matched_terms: refactorTerms };
+    return { reason: 'refactor', matched_terms: refactorTerms }
   }
 
-  const explainTerms = matchTerms(normalizedPrompt, config.explain_terms);
+  const explainTerms = matchTerms(normalizedPrompt, config.explain_terms)
   if (explainTerms.length > 0 && localCodeCue.detected) {
-    return { reason: 'explain', matched_terms: [...new Set([...explainTerms, ...localCodeCue.matched_terms])].sort() };
+    return { reason: 'explain', matched_terms: [...new Set([...explainTerms, ...localCodeCue.matched_terms])].sort() }
   }
 
-  if (localCodeCue.detected) {
-    return { reason: 'explain', matched_terms: localCodeCue.matched_terms };
-  }
-
-  return null;
+  return localCodeCue.detected
+    ? { reason: 'explain', matched_terms: localCodeCue.matched_terms }
+    : null
 }
 
 function classifyTaskApplicability(prompt) {
-  const normalizedPrompt = normalizePrompt(prompt);
-  const negative = negativeClassification(prompt, normalizedPrompt);
+  const normalizedPrompt = normalizePrompt(prompt)
+  const negative = negativeClassification(prompt, normalizedPrompt)
   if (negative) {
     return {
       needs_local_code_context: false,
       reason: negative.reason,
-    };
+    }
   }
 
-  const local = localClassification(prompt, normalizedPrompt);
+  const local = localClassification(prompt, normalizedPrompt)
   if (local) {
     return {
       needs_local_code_context: true,
       reason: local.reason,
-    };
+    }
   }
 
   return {
     needs_local_code_context: false,
     reason: 'general_research',
-  };
+  }
 }
 
 process.stdin.on('data', (chunk) => {
-  input += chunk;
-});
+  input += chunk
+})
 
 process.stdin.on('end', () => {
   try {
-    fs.accessSync('out/graph.json');
-  } catch (error) {
-    return;
+    fs.accessSync('out/graph.json')
+  } catch {
+    return
   }
 
-  let prompt = '';
+  let prompt = ''
   try {
-    const payload = input.length > 0 ? JSON.parse(input) : {};
+    const payload = input.length > 0 ? JSON.parse(input) : {}
     if (typeof payload.prompt === 'string') {
-      prompt = payload.prompt;
+      prompt = payload.prompt
     }
-  } catch (error) {
-    prompt = '';
+  } catch {
+    prompt = ''
   }
 
-  const classification = classifyTaskApplicability(prompt);
-  const debugEnabled = /^(1|true|yes)$/i.test(String(process.env.MADAR_HOOK_DEBUG || ''));
+  const classification = classifyTaskApplicability(prompt)
+  const debugEnabled = /^(1|true|yes)$/i.test(String(process.env.MADAR_HOOK_DEBUG || ''))
   if (!classification.needs_local_code_context) {
     if (!debugEnabled) {
-      return;
+      return
     }
 
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
-        hookEventName: '${hookEventName}',
-        additionalContext: 'Skipped Madar: task is ' + config.reason_labels[classification.reason] + ', not local codebase context.',
+        hookEventName,
+        additionalContext: 'Skipped Madar: task is '
+          + ((config.reason_labels || {})[classification.reason] || classification.reason)
+          + ', not local codebase context.',
       },
-    }));
-    return;
+    }))
+    return
   }
 
-  process.stdout.write(matchPayload);
-});
+  process.stdout.write(matchPayload)
+})
 `
-
-  const b64Source = Buffer.from(source, 'utf8').toString('base64')
-  return `node -e "eval(Buffer.from('${b64Source}','base64').toString('utf8'))"`
 }

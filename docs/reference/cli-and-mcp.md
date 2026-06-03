@@ -29,7 +29,7 @@ For practical multi-agent workflows across Claude Code, Codex, Copilot, Cursor, 
 
 Treat every Madar MCP install, plugin, hook, or AGENTS profile as a local trust boundary. Only enable it for repositories and local agent runtimes you trust. Prefer `--profile strict` when you only need the lean core MCP tools.
 
-For Claude, Cursor, Copilot, and Gemini, `--profile strict` keeps the lean core MCP tool surface but rewrites the generated guidance into a compact flow: call `context_pack` once for the task before broader exploration, answer after one high- or medium-confidence pack when `diagnostics.quality_score >= 0.5` and `missing_context` is empty, do not run broad `Glob` patterns, repo-wide `grep` / `find` searches, or raw file sweeps after that strong pack, prefer Madar over non-Madar MCPs for codebase questions unless Madar returns `agent_directive: explore_with_caution`, let that Madar guidance override conflicting auto-activated exploration skills, expand only when `missing_context` / `missing_semantic` or diagnostics justify it, and keep `out/GRAPH_REPORT.md` as a fallback-only read when the pack or graph tools are unavailable, stale, or insufficient.
+For Claude, Cursor, Copilot, and Gemini, `--profile strict` keeps the lean core MCP tool surface. `--profile strict` keeps the seven core MCP tools but adds one bounded `context_pack` call per task through the generated guidance. In practice that compact flow is: call `context_pack` once for the task before broader exploration, answer after one high- or medium-confidence pack when `diagnostics.quality_score >= 0.5` and `missing_context` is empty, do not run broad `Glob` patterns, repo-wide `grep` / `find` searches, or raw file sweeps after that strong pack, prefer Madar over non-Madar MCPs for codebase questions unless Madar returns `agent_directive: explore_with_caution`, let that Madar guidance override conflicting auto-activated exploration skills, expand only when `missing_context` / `missing_semantic` or diagnostics justify it, and keep `out/GRAPH_REPORT.md` as a fallback-only read when the pack or graph tools are unavailable, stale, or insufficient.
 
 Aider and OpenCode are intentionally context-pack-first: run `madar generate .`, install the profile, and start broad codebase work with `madar pack "<task>" --task explain` before raw file search. `madar aider install` writes an AGENTS.md profile only; remove it with `madar aider uninstall`. `madar opencode install` writes the AGENTS.md profile, `.opencode/plugins/madar.js`, and the Madar MCP entry in `opencode.json` or `opencode.jsonc`; remove only Madar-owned content with `madar opencode uninstall`.
 
@@ -44,6 +44,8 @@ npm run registry:validate
 ```
 
 The official MCP Registry hosts metadata, not Madar code or your local graph artifact. Madar's registry entry points back to the public npm package and the same local-first runtime flow: run `madar generate .` to create `out/graph.json`, then start the local stdio server with `npx @lubab/madar serve --stdio out/graph.json`, or let `madar <agent> install` write that wiring for you.
+
+If you still discover older `graphify-ts` links or listings, Madar is the current project name. Use `https://github.com/mohanagy/madar` and `@lubab/madar` as the canonical repository and package surfaces.
 
 Private registry usage stays out of scope for the public Madar listing because the official MCP Registry only accepts public package sources. Keep private or self-hosted registry workflows separate from this metadata file.
 
@@ -61,11 +63,19 @@ These seven MCP tools handle the most common agent workflows in the default core
 | `graph_stats` | "How big is this graph?" - node/edge counts, density, file-type mix |
 | `graph_summary` | "Give me the repo at a glance" - bounded deterministic overview of counts, domains, top modules, entrypoints, frameworks, and runtime paths |
 
-The full surface is 26 tools, opt-in via `MADAR_TOOL_PROFILE=full` or `--profile full` on install. Full-profile additions: `context_pack`, `context_expand`, `context_prompt`, `context_session_reset`, `risk_map`, `implementation_checklist`, `relevant_files`, `feature_map`, `time_travel_compare`, `community_details`, `query_graph`, `get_node`, `get_neighbors`, `explain_node`, `shortest_path`, `graph_diff`, `god_nodes`, `semantic_anomalies`, `get_community`.
+`--profile strict` keeps those seven core tools but adds one bounded `context_pack` call per task before broader exploration. The full surface is 26 tools, opt-in via `MADAR_TOOL_PROFILE=full` or `--profile full` on install. Full-profile additions beyond that strict one-pack flow: `context_pack`, `context_expand`, `context_prompt`, `context_session_reset`, `risk_map`, `implementation_checklist`, `relevant_files`, `feature_map`, `time_travel_compare`, `community_details`, `query_graph`, `get_node`, `get_neighbors`, `explain_node`, `shortest_path`, `graph_diff`, `god_nodes`, `semantic_anomalies`, `get_community`.
 
 Full request/response examples live in [`examples/mcp-tool-examples.md`](../../examples/mcp-tool-examples.md).
 
 Within one MCP stdio session, identical `context_pack` requests for `task=explain` are reused automatically when the graph version and relevant prompt/options match. The cache is memory-only, skips delta-session packs, and invalidates itself when `graph.json` changes.
+
+## Graph freshness contract
+
+`madar pack`, `madar prompt`, and `madar handoff` all surface graph freshness so local callers can distinguish whole-repo drift from selected-context drift. On git workspaces, Madar compares the graph's recorded build commit plus dirty-file snapshot against the current HEAD and working-tree diff; on non-git workspaces it falls back to stored file fingerprints. The overall status can be `fresh`, `partially_stale`, `possibly_stale`, `stale`, or `missing`, and the receipt also reports selected context freshness so unrelated indexed changes do not block by default. `madar doctor` and `madar status` report the same statuses and recommend regeneration when the graph is not fresh.
+
+Use `--require-fresh-context` on `madar pack`, `madar prompt`, or `madar handoff` to refuse selected context drift instead of only warning. Use `--require-fresh-graph` when any repo drift should block. The MCP equivalents are `require_fresh_context` and `require_fresh_graph` on `context_pack` and `context_prompt`. For machine-readable consumers, packs expose the receipt under `governance.graph_freshness` and prompts expose it under `graph_freshness`. The governance receipt remains source-safe and does not include the local `graph_path`.
+
+Cached `context_pack` explain responses still refresh the current freshness receipt before reuse, so a cache hit does not hide newly changed or missing indexed source files.
 
 ## Common commands
 
@@ -77,6 +87,8 @@ madar summary                             # bounded JSON overview
 madar pack "how does auth work?" --task explain --format text
 madar pack "add auth telemetry" --task implement --format json
 madar pack "why does auth fail?" --task explain --retrieval-strategy slice-v1
+madar pack "how does auth work?" --task explain --require-fresh-context
+madar pack "how does auth work?" --task explain --require-fresh-graph
 madar prompt "how does auth work?" --provider claude
 madar handoff "add auth telemetry" --task implement --consumer copilot
 madar review-compare out/graph.json --exec '...' --yes
@@ -84,10 +96,14 @@ madar compare "How does auth work?" --exec '...' --yes
 madar compare "How does auth work?" --baseline-mode pack_only --exec '...' --yes
 madar telemetry enable
 madar telemetry status
+madar telemetry clear
+madar telemetry report
 madar time-travel main HEAD --view risk
 madar federate frontend/graph.json backend/graph.json
 madar --help
 ```
+
+On Windows, `compare`, `review-compare`, and benchmark `--exec` templates run under `cmd.exe`, so prefer `type {prompt_file} | claude ...` over PowerShell-specific piping or quoting.
 
 ## Default discovery rules
 

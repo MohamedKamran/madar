@@ -1015,7 +1015,9 @@ function buildSummaryResult(overrides: {
           share_safe_report: '/tmp/project/out/compare/2026-05-12T00-00-00Z/report.share-safe.json',
           baseline_answer: '/tmp/project/out/compare/2026-05-12T00-00-00Z/baseline.md',
           madar_answer: '/tmp/project/out/compare/2026-05-12T00-00-00Z/madar.md',
-          prompt_file: '/tmp/project/out/compare/2026-05-12T00-00-00Z/prompt.txt',
+          baseline_prompt: '/tmp/project/out/compare/2026-05-12T00-00-00Z/baseline-prompt.txt',
+          madar_prompt: '/tmp/project/out/compare/2026-05-12T00-00-00Z/madar-prompt.txt',
+          prompt_file: '/tmp/project/out/compare/2026-05-12T00-00-00Z/madar-prompt.txt',
         },
       },
     ],
@@ -1067,7 +1069,7 @@ describe('parseAnthropicResultEvent', () => {
 })
 
 describe('executeNativeAgentCompare', () => {
-  it('writes a native-agent prompt that targets retrieve first on the default core profile', async () => {
+  it('writes separate native-agent prompts for the baseline and Madar arms', async () => {
     const { projectDir, graphPath, outputDir } = makeFixtureProject()
     try {
       const result = await executeNativeAgentCompare(
@@ -1085,14 +1087,24 @@ describe('executeNativeAgentCompare', () => {
       )
 
       const report = result.reports[0] as NativeAgentCompareReport
-      const prompt = readFileSync(report.paths.prompt_file, 'utf8')
+      const baselinePrompt = readFileSync(report.paths.baseline_prompt, 'utf8')
+      const madarPrompt = readFileSync(report.paths.madar_prompt, 'utf8')
 
-      expect(prompt).toContain('Call retrieve first')
-      expect(prompt).toContain('Inspect matched_nodes, snippets, relationships, and community context before deciding what to do next')
-      expect(prompt).toContain('If retrieve already answers the question, answer from the retrieved evidence and stop without raw search')
-      expect(prompt).toContain('Allow at most one focused Madar follow-up before raw search')
-      expect(prompt).toContain('Broad raw search requires an explicit missing-context reason')
-      expect(prompt).toContain('Question: What is the cluster module?')
+      expect(baselinePrompt).toContain('Answer the question from normal repository evidence.')
+      expect(baselinePrompt).toContain('Do not call Madar-specific tools')
+      expect(baselinePrompt).not.toContain('Call retrieve first')
+      expect(baselinePrompt).not.toContain('Follow the Madar pack contract')
+      expect(baselinePrompt).toContain('Question: What is the cluster module?')
+
+      expect(madarPrompt).toContain('Call retrieve first')
+      expect(madarPrompt).toContain('Inspect matched_nodes, snippets, relationships, and community context before deciding what to do next')
+      expect(madarPrompt).toContain('If retrieve already answers the question, answer from the retrieved evidence and stop without raw search')
+      expect(madarPrompt).toContain('Do not call community_overview, graph_summary, get_community, query_graph')
+      expect(madarPrompt).toContain('Allow at most one focused raw file read or search')
+      expect(madarPrompt).toContain('Broad raw search requires an explicit missing-context reason')
+      expect(madarPrompt).toContain('Question: What is the cluster module?')
+
+      expect(report.paths.prompt_file).toBe(report.paths.madar_prompt)
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }
@@ -1116,7 +1128,7 @@ describe('executeNativeAgentCompare', () => {
       )
 
       const report = result.reports[0] as NativeAgentCompareReport
-      const prompt = readFileSync(report.paths.prompt_file, 'utf8')
+      const prompt = readFileSync(report.paths.madar_prompt, 'utf8')
 
       expect(prompt).toContain('Call context_pack first')
       expect(prompt).toContain('Inspect evidence.pack_confidence, evidence.coverage, evidence.agent_directive, missing_context, and recommended_first_read')
@@ -1213,10 +1225,14 @@ describe('executeNativeAgentCompare', () => {
         }),
       })
 
-      const prompt = readFileSync(report.paths.prompt_file, 'utf8')
-      expect(prompt).toContain('Implement the requested change using the Madar implementation pack.')
-      expect(prompt).toContain('src/session.ts')
-      expect(prompt).toContain('npm run typecheck')
+      const baselinePrompt = readFileSync(report.paths.baseline_prompt, 'utf8')
+      const madarPrompt = readFileSync(report.paths.madar_prompt, 'utf8')
+      expect(baselinePrompt).toContain('Implement the requested change using normal repository evidence.')
+      expect(baselinePrompt).toContain('Do not call Madar-specific tools')
+      expect(baselinePrompt).not.toContain('Implement the requested change using the Madar implementation pack.')
+      expect(madarPrompt).toContain('Implement the requested change using the Madar implementation pack.')
+      expect(madarPrompt).toContain('src/session.ts')
+      expect(madarPrompt).toContain('npm run typecheck')
 
       const savedReport = JSON.parse(readFileSync(report.paths.report, 'utf8')) as Record<string, unknown>
       const shareSafeReport = JSON.parse(readFileSync(report.paths.share_safe_report, 'utf8')) as Record<string, unknown>
@@ -1305,6 +1321,7 @@ describe('executeNativeAgentCompare', () => {
         task: 'implement',
         validationTimeoutSeconds: 0.01,
       } as Parameters<typeof executeNativeAgentCompare>[0] & { validationTimeoutSeconds: number }
+      const hangBudgetMs = 2000
 
       const outcome = await Promise.race([
         executeNativeAgentCompare(
@@ -1315,7 +1332,7 @@ describe('executeNativeAgentCompare', () => {
           },
         ).then((result) => ({ kind: 'resolved' as const, result })),
         new Promise<{ kind: 'hung' }>((resolve) => {
-          setTimeout(() => resolve({ kind: 'hung' }), 1000)
+          setTimeout(() => resolve({ kind: 'hung' }), hangBudgetMs)
         }),
       ])
 
@@ -1779,6 +1796,17 @@ describe('executeNativeAgentCompare', () => {
         ),
         'utf8',
       )
+
+      expect(inspectClaudeNativeAgentInstall(projectDir).verified).toBe(false)
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not treat a missing generated Claude hook script as a verified install', () => {
+    const { projectDir } = makeFixtureProject({ installState: 'managed' })
+    try {
+      rmSync(join(projectDir, '.claude', 'madar-user-prompt-submit.cjs'), { force: true })
 
       expect(inspectClaudeNativeAgentInstall(projectDir).verified).toBe(false)
     } finally {
@@ -2617,6 +2645,58 @@ describe('executeNativeAgentCompare', () => {
     }
   })
 
+  it('saves partial madar stdout when a timed-out arm settles after abort', async () => {
+    const { projectDir, graphPath, outputDir } = makeFixtureProject()
+    try {
+      const request = {
+        graphPath,
+        question: 'stalled madar arm with partial output',
+        outputDir,
+        execTemplate: 'mock-runner',
+        baselineMode: 'native_agent',
+        perArmTimeoutSeconds: 0.01,
+      } as Parameters<typeof executeNativeAgentCompare>[0] & { perArmTimeoutSeconds: number }
+
+      const stalledRunner: NativeAgentRunner = async (input) => {
+        if (input.mode === 'baseline') {
+          return {
+            exitCode: 0,
+            stdout: `${JSON.stringify(BASELINE_USAGE_PAYLOAD)}\n`,
+            stderr: '',
+            elapsedMs: 10,
+          }
+        }
+        return await new Promise((resolve) => {
+          input.signal!.addEventListener('abort', () => {
+            resolve({
+              exitCode: 1,
+              stdout: '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__madar__retrieve"}]}}\npartial trace\n',
+              stderr: 'aborted by timeout\n',
+              elapsedMs: 10,
+            })
+          }, { once: true })
+        })
+      }
+
+      const result = await executeNativeAgentCompare(
+        request,
+        {
+          runner: stalledRunner,
+          now: () => new Date('2026-05-28T00:00:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport
+      expect(report.madar.kind).toBe('runner_error')
+      expect((report.madar as { failure_reason?: unknown }).failure_reason).toBe('timed_out')
+      expect((report.madar as { evidence?: unknown }).evidence).toBe('Timed out after 10ms. Partial stdout was saved to the answer artifact.')
+      expect((report.madar as { stderr?: unknown }).stderr).toBe('aborted by timeout')
+      expect(readFileSync(report.paths.madar_answer, 'utf8')).toContain('partial trace')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
   it('times out a stuck baseline arm and writes a partial report instead of hanging', async () => {
     const { projectDir, graphPath, outputDir } = makeFixtureProject()
     try {
@@ -2772,9 +2852,9 @@ describe('executeNativeAgentCompare', () => {
       // If the snapshot renamed out/ wholesale, the path would be missing
       // and the runner would have observed it. The runner returns whether each call
       // saw the file present.
-      const probeResults: Array<{ mode: CompareRunMode; promptFileExists: boolean }> = []
+      const probeResults: Array<{ mode: CompareRunMode; promptFileExists: boolean; promptFile: string }> = []
       const probingRunner: NativeAgentRunner = async (input) => {
-        probeResults.push({ mode: input.mode, promptFileExists: existsSync(input.promptFile) })
+        probeResults.push({ mode: input.mode, promptFileExists: existsSync(input.promptFile), promptFile: input.promptFile })
         const payload = input.mode === 'baseline' ? BASELINE_USAGE_PAYLOAD : MADAR_USAGE_PAYLOAD
         return {
           exitCode: 0,
@@ -2800,6 +2880,14 @@ describe('executeNativeAgentCompare', () => {
 
       expect(probeResults).toHaveLength(2)
       expect(probeResults.every((probe) => probe.promptFileExists)).toBe(true)
+      expect(probeResults[0]).toEqual(expect.objectContaining({
+        mode: 'baseline',
+        promptFile: expect.stringContaining('baseline-prompt.txt'),
+      }))
+      expect(probeResults[1]).toEqual(expect.objectContaining({
+        mode: 'madar',
+        promptFile: expect.stringContaining('madar-prompt.txt'),
+      }))
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }

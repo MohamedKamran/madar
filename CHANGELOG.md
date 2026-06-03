@@ -2,6 +2,56 @@
 
 All notable changes to the TypeScript package will be documented in this file.
 
+## [0.27.9-next.6] - 2026-06-04
+
+### Fixed
+
+- **Windows native-agent `--exec` commands now run under the expected shell contract**: compare, benchmark, and review native-agent runners now use `cmd.exe` on Windows with cmd-compatible quoting and workspace wrapping, so cmd-style exec templates such as `type {prompt_file} | claude -p --output-format stream-json --verbose` no longer hang the Madar arm behind a PowerShell mismatch.
+
+## [0.27.9-next.5] - 2026-06-04
+
+### Fixed
+
+- **Native-agent compare prompts are stricter and timeout artifacts keep partial evidence**: task-scoped compare prompts now forbid broad graph-navigation detours, limit raw follow-up exploration to one focused read/search with concise caveats when confidence stays low, and timed-out native-agent arms now preserve any settled stdout/stderr in the saved answer/report artifacts instead of discarding that partial evidence.
+
+## [0.27.9-next.4] - 2026-06-03
+
+### Fixed
+
+- **Native-agent compare now keeps baseline and Madar prompt artifacts separate**: compare runs now write dedicated baseline and Madar prompt files, record both paths in `report.json`, and preserve the legacy `prompt_file` field as the Madar prompt so existing consumers stay compatible while prompt inspection becomes clearer and debuggable.
+
+## [0.27.9-next.3] - 2026-06-03
+
+### Fixed
+
+- **Windows Claude prompt hooks now run from a generated local script instead of an oversized inline shell command**: `claudeInstall` now writes `.claude/madar-user-prompt-submit.cjs` and points `UserPromptSubmit` at `node .claude/madar-user-prompt-submit.cjs`, eliminating the shell-length truncation that still broke `0.27.9-next.2` with `unexpected EOF while looking for matching '"'`.
+
+## [0.27.9-next.2] - 2026-06-03
+
+### Fixed
+
+- **Windows cmd.exe command-line length limit is now respected**: the generated `UserPromptSubmit` hook has been aggressively minified to fit within Windows cmd.exe's 8,191 character limit, resolving the `unexpected eof while looking for matching` shell parse failure on Windows systems.
+
+## [0.27.9-next.1] - 2026-06-03
+
+### Fixed
+
+- **Windows Claude submit hooks are now shell-safe**: the generated `UserPromptSubmit` hook and related payload builders now pass base64 data through argv instead of embedding it in shell-quoted inline JavaScript, avoiding the Windows `unexpected eof while looking for matching` failure.
+
+## [0.27.9-next.0] - 2026-06-03
+
+### Added
+
+- **Adoption proof surfaces now cover the full next-track rollout bundle**: Madar now ships a public multi-repo benchmark suite and language fixtures, the one-command `madar try` first-run flow, verified agent-specific quickstarts and smoke-tested install docs, a design-partner feedback loop with reproducible receipts, and the proof-first launch/distribution checklist. Closes #469, #470, #472, #473, and #474.
+
+### Changed
+
+- **Public adoption messaging and instrumentation are now aligned across the next track**: the README/npm discovery path now reflects the Madar positioning and legacy-name cleanup, prerelease docs stay on `blob/next`, and the opt-in telemetry funnel records coarse install/generate/pack/prompt/doctor/status/compare adoption stages without collecting source text or paths. Closes #467, #468, and #471.
+
+### Fixed
+
+- **Graph freshness and stale-context guarantees are now scoped and git-backed**: `madar pack`, `madar prompt`, `madar handoff`, `madar doctor`, and `madar status` now report whole-repo vs selected-context freshness using the graph build revision plus current git diff as the source of truth on git workspaces, with privacy-safe governance receipts and tighter stale-context behavior for follow-up flows. Closes #477 and #479.
+
 ## [0.27.8] - 2026-06-02
 
 ### Added

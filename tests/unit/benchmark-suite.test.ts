@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -106,13 +106,18 @@ function makeCompareResult(input: {
   mkdirSync(input.outputDir, { recursive: true })
   const baselineAnswerPath = join(input.outputDir, 'baseline-answer.txt')
   const madarAnswerPath = join(input.outputDir, 'madar-answer.txt')
-  const promptPath = join(input.outputDir, 'native_agent-prompt.txt')
+  const baselinePromptPath = join(input.outputDir, 'baseline-prompt.txt')
+  const madarPromptPath = join(input.outputDir, 'madar-prompt.txt')
+  const promptPath = madarPromptPath
+  const legacyPromptPath = join(input.outputDir, 'native_agent-prompt.txt')
   const reportPath = join(input.outputDir, 'report.json')
   const shareSafeReportPath = join(input.outputDir, 'report.share-safe.json')
 
   writeFileSync(baselineAnswerPath, 'baseline\n', 'utf8')
   writeFileSync(madarAnswerPath, 'madar\n', 'utf8')
-  writeFileSync(promptPath, `${input.question}\n`, 'utf8')
+  writeFileSync(baselinePromptPath, `${input.question}\n`, 'utf8')
+  writeFileSync(madarPromptPath, `${input.question}\n`, 'utf8')
+  writeFileSync(legacyPromptPath, `${input.question}\n`, 'utf8')
 
   const publishedReport = {
     graph_path: input.graphPath,
@@ -234,6 +239,8 @@ function makeCompareResult(input: {
       share_safe_report: shareSafeReportPath,
       baseline_answer: baselineAnswerPath,
       madar_answer: madarAnswerPath,
+      baseline_prompt: baselinePromptPath,
+      madar_prompt: madarPromptPath,
       prompt_file: promptPath,
     },
     ...(input.workflowOutcome
@@ -304,13 +311,24 @@ describe('benchmark suite manifests', () => {
       }),
       expect.objectContaining({
         id: 'python-service',
-        status: 'planned',
+        status: 'ready',
+      }),
+      expect.objectContaining({
+        id: 'go-service',
+        status: 'ready',
       }),
     ]))
     expect(tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'explain-runtime',
         status: 'ready',
+        prompts: expect.objectContaining({
+          'ts-small': expect.any(String),
+          'nestjs-mid': expect.any(String),
+          'ts-monorepo-large': expect.any(String),
+          'python-service': expect.any(String),
+          'go-service': expect.any(String),
+        }),
       }),
       expect.objectContaining({
         id: 'implement',
@@ -319,6 +337,8 @@ describe('benchmark suite manifests', () => {
           'ts-small': expect.any(String),
           'nestjs-mid': expect.any(String),
           'ts-monorepo-large': expect.any(String),
+          'python-service': expect.any(String),
+          'go-service': expect.any(String),
         }),
       }),
       expect.objectContaining({
@@ -328,6 +348,8 @@ describe('benchmark suite manifests', () => {
           'ts-small': expect.any(String),
           'nestjs-mid': expect.any(String),
           'ts-monorepo-large': expect.any(String),
+          'python-service': expect.any(String),
+          'go-service': expect.any(String),
         }),
       }),
       expect.objectContaining({
@@ -337,9 +359,28 @@ describe('benchmark suite manifests', () => {
           'ts-small': expect.any(String),
           'nestjs-mid': expect.any(String),
           'ts-monorepo-large': expect.any(String),
+          'python-service': expect.any(String),
+          'go-service': expect.any(String),
         }),
       }),
     ]))
+  })
+
+  it('keeps every documented repo path present and every ready repo/task cell prompt-wired', () => {
+    const repos = loadBenchmarkSuiteRepos()
+    const tasks = loadBenchmarkSuiteTasks()
+    const readyRepoIds = repos.filter((repo) => repo.status === 'ready').map((repo) => repo.id)
+
+    for (const repo of repos) {
+      expect(existsSync(repo.path)).toBe(true)
+    }
+
+    for (const task of tasks.filter((entry) => entry.status === 'ready')) {
+      for (const repoId of readyRepoIds) {
+        expect(task.prompts[repoId]).toEqual(expect.any(String))
+        expect(task.prompts[repoId]?.trim().length).toBeGreaterThan(0)
+      }
+    }
   })
 
   it('rejects repo ids with unsafe path characters', async () => {
@@ -749,6 +790,131 @@ describe('runBenchmarkSuite', () => {
       )
 
       expect(seenTasks).toEqual(['implement', 'implement'])
+    })
+  })
+
+  it('wraps benchmark workspace exec templates with cmd-compatible Windows syntax', async () => {
+    await withTempDir(async (tempDir) => {
+      const runnableRepoPath = createFixtureRepo(join(tempDir, 'repos', 'nestjs-mid'))
+      const repos: BenchmarkSuiteRepo[] = [
+        {
+          id: 'nestjs-mid',
+          name: 'Fixture NestJS-like service',
+          path: runnableRepoPath,
+          description: 'Ready fixture',
+          size: 'mid',
+          language: 'typescript',
+          shape: 'service',
+          status: 'ready',
+          supportsSpi: false,
+        },
+      ]
+      const tasks: BenchmarkSuiteTask[] = [
+        {
+          id: 'explain-runtime',
+          name: 'Explain runtime flow',
+          description: 'Trace a runtime path end to end.',
+          status: 'ready',
+          prompts: {
+            'nestjs-mid': 'How does login session creation flow work?',
+          },
+        },
+      ]
+      const seenExecTemplates: string[] = []
+      const originalPlatform = process.platform
+
+      Object.defineProperty(process, 'platform', {
+        value: 'win32',
+        configurable: true,
+      })
+
+      try {
+        await runBenchmarkSuite(
+          {
+            repo: null,
+            task: 'explain-runtime',
+            mode: 'cold',
+            trials: 1,
+            outputDir: join(tempDir, 'results'),
+            execTemplate: 'type {prompt_file} | claude -p --output-format json',
+            dryRun: false,
+            yes: true,
+          },
+          {
+            repos,
+            tasks,
+            now: () => new Date('2026-05-27T12:34:56Z'),
+            generateGraph: (rootPath = '.', options = {}) => {
+              const outputDir = join(rootPath, 'out')
+              mkdirSync(outputDir, { recursive: true })
+              const graphPath = join(outputDir, 'graph.json')
+              writeFileSync(graphPath, '{}\n', 'utf8')
+              return {
+                mode: options.useSpi ? 'generate' : 'generate',
+                rootPath,
+                outputDir,
+                graphPath,
+                reportPath: join(outputDir, 'GRAPH_REPORT.md'),
+                htmlPath: null,
+                wikiPath: null,
+                obsidianPath: null,
+                svgPath: null,
+                graphmlPath: null,
+                cypherPath: null,
+                docsPath: null,
+                totalFiles: 1,
+                codeFiles: 1,
+                nonCodeFiles: 0,
+                extractableFiles: 1,
+                extractedFiles: 1,
+                totalWords: 10,
+                nodeCount: 1,
+                edgeCount: 0,
+                communityCount: 1,
+                changedFiles: 0,
+                deletedFiles: 0,
+                cache: null,
+                warning: null,
+                notes: [],
+              } satisfies GenerateGraphResult
+            },
+            executeNativeAgentCompare: async (input) => {
+              seenExecTemplates.push(input.execTemplate)
+              return makeCompareResult({
+                question: input.question ?? 'unknown',
+                graphPath: input.graphPath,
+                outputDir: input.outputDir,
+                baselineInputTokens: 300,
+                madarInputTokens: 200,
+                baselineTurns: 6,
+                madarTurns: 4,
+                baselineDurationMs: 9000,
+                madarDurationMs: 6000,
+                baselineCostUsd: 1.2,
+                madarCostUsd: 0.8,
+                baselineToolTotal: 9,
+                madarToolTotal: 5,
+                baselineRead: 4,
+                madarRead: 3,
+                baselineGlob: 2,
+                madarGlob: 1,
+                baselineGrep: 1,
+                madarGrep: 1,
+              })
+            },
+          },
+        )
+      } finally {
+        Object.defineProperty(process, 'platform', {
+          value: originalPlatform,
+          configurable: true,
+        })
+      }
+
+      expect(seenExecTemplates).toHaveLength(1)
+      expect(seenExecTemplates[0]).toContain('cd /d "')
+      expect(seenExecTemplates[0]).toContain('&& type {prompt_file} | claude -p --output-format json')
+      expect(seenExecTemplates[0]).not.toContain('Set-Location -LiteralPath')
     })
   })
 

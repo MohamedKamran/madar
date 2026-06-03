@@ -1,7 +1,7 @@
 {
     "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
     "name": "io.github.mohanagy/madar",
-    "description": "Local MCP context packs for AI coding agents.",
+    "description": "Task-aware local context packs for TypeScript/Node AI coding workflows.",
     "title": "Madar",
     "websiteUrl": "https://github.com/mohanagy/madar",
     "repository": {
@@ -9,13 +9,13 @@
         "source": "github",
         "url": "https://github.com/mohanagy/madar"
     },
-    "version": "0.27.8",
+    "version": "0.27.9-next.6",
     "packages": [
         {
             "registryType": "npm",
             "registryBaseUrl": "https://registry.npmjs.org",
             "identifier": "@lubab/madar",
-            "version": "0.27.8",
+            "version": "0.27.9-next.6",
             "runtimeHint": "npx",
             "transport": {
                 "type": "stdio"
@@ -53,7 +53,7 @@
     ],
     "_meta": {
         "io.modelcontextprotocol.registry/publisher-provided": {
-            "notes": "Public npm package plus local graph artifact install flow.",
+            "notes": "Public npm package plus local graph artifact install flow. Madar is the renamed continuation of `graphify-ts`; use `@lubab/madar` and `https://github.com/mohanagy/madar` as the canonical package and repository.",
             "source": "docs/mcp-registry/server.json"
         }
     }

@@ -403,16 +403,20 @@ describe('shared prompt runner parsing', () => {
 describe('compare runtime', () => {
   it('expands compare exec placeholders safely', () => {
     expect(
-      expandCompareExecTemplate('runner --prompt {prompt_file} --question {question} --mode {mode} --out {output_file}', {
-        promptFile: '/tmp/prompt pack.txt',
-        question: 'how does login work?',
-        mode: 'baseline',
-        outputFile: '/tmp/output.txt',
-      }),
+      expandCompareExecTemplate(
+        'runner --prompt {prompt_file} --question {question} --mode {mode} --out {output_file}',
+        {
+          promptFile: '/tmp/prompt pack.txt',
+          question: 'how does login work?',
+          mode: 'baseline',
+          outputFile: '/tmp/output.txt',
+        },
+        'linux',
+      ),
     ).toBe("runner --prompt '/tmp/prompt pack.txt' --question 'how does login work?' --mode 'baseline' --out '/tmp/output.txt'")
   })
 
-  it('expands compare exec placeholders safely for PowerShell on Windows', () => {
+  it('expands compare exec placeholders safely for cmd.exe on Windows', () => {
     expect(
       expandCompareExecTemplate(
         'runner --question {question} --prompt {prompt_file}',
@@ -424,7 +428,7 @@ describe('compare runtime', () => {
         },
         'win32',
       ),
-    ).toBe("runner --question 'how''s login work?' --prompt 'C:\\Users\\Jane Doe\\prompt.txt'")
+    ).toBe('runner --question "how\'s login work?" --prompt "C:\\Users\\Jane Doe\\prompt.txt"')
   })
 
   it.each([
@@ -1206,12 +1210,15 @@ describe('compare runtime', () => {
   it('snapshots the native-agent prompt contract', () => {
     expect(buildNativeAgentPrompt('What is the cluster module?')).toMatchInlineSnapshot(`
       "Follow the Madar pack contract exactly.
-      Call retrieve first for explain or runtime questions before any raw file or broad repo search.
+      Call retrieve first for explain or runtime questions before any raw file or broad repo search. If the tool is deferred, use ToolSearch only to select mcp__madar__retrieve.
       Inspect matched_nodes, snippets, relationships, and community context before deciding what to do next.
       If retrieve already answers the question, answer from the retrieved evidence and stop without raw search.
-      Allow at most one focused Madar follow-up before raw search when retrieve leaves a specific gap.
+      Do not call community_overview, graph_summary, get_community, query_graph, or other broad graph-navigation tools for task-specific compare runs.
+      Allow at most one focused raw file read or search when retrieve leaves a specific gap.
       Broad raw search requires an explicit missing-context reason grounded in gaps from the retrieve result.
+      If retrieve is low confidence or incomplete, answer with a clear caveat after that one focused follow-up instead of continuing to explore.
       Any broad search before the first Madar call violates the prompt contract.
+      Keep the answer concise: key steps, key files, and caveats only.
 
       Question: What is the cluster module?
 
@@ -1226,9 +1233,12 @@ describe('compare runtime', () => {
       Call context_pack first for explain, review, impact, or runtime questions before any raw file or broad repo search.
       Inspect evidence.pack_confidence, evidence.coverage, evidence.agent_directive, missing_context, and recommended_first_read before deciding what to do next.
       If evidence.agent_directive is answer_from_pack, answer from the pack and stop without raw search.
-      Allow at most one focused Madar follow-up before raw search when evidence.agent_directive is verify_one_targeted_file or explore_with_caution.
+      Do not call community_overview, graph_summary, get_community, query_graph, or other broad graph-navigation tools for task-specific compare runs.
+      Allow at most one focused raw file read or search when evidence.agent_directive is verify_one_targeted_file or explore_with_caution.
       Broad raw search requires an explicit missing-context reason grounded in missing_context or coverage gaps.
+      If the pack is low confidence or incomplete, answer with a clear caveat after that one focused follow-up instead of continuing to explore.
       Any broad search before the first Madar call violates the prompt contract.
+      Keep the answer concise: key steps, key files, and caveats only.
 
       Question: What is the cluster module?
 
@@ -2940,7 +2950,9 @@ describe('compare runtime', () => {
           share_safe_report: '<artifact-root>/report.share-safe.json',
           baseline_answer: '<artifact-root>/baseline-answer.txt',
           madar_answer: '<artifact-root>/madar-answer.txt',
-          prompt_file: '<artifact-root>/native_agent-prompt.txt',
+          baseline_prompt: '<artifact-root>/baseline-prompt.txt',
+          madar_prompt: '<artifact-root>/madar-prompt.txt',
+          prompt_file: '<artifact-root>/madar-prompt.txt',
         }),
         baseline: expect.objectContaining({
           kind: 'answer_only',

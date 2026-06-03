@@ -29,6 +29,8 @@ export interface PackCliOptions {
   task: ContextPackTaskKind
   taskExplicit?: boolean
   graphPath: string
+  requireFreshGraph?: boolean
+  requireFreshContext?: boolean
   format?: ContextPackFormat
   why?: boolean
   verbose?: boolean
@@ -39,12 +41,19 @@ export interface PackCliOptions {
   retrievalStrategy?: ContextPackRetrievalStrategy
 }
 
+export interface TryCliOptions {
+  prompt: string
+  path: string
+}
+
 export interface HandoffCliOptions {
   prompt: string
   budget: number
   task: ContextPackTaskKind
   graphPath: string
   consumer: 'generic' | 'codex' | 'cursor' | 'copilot'
+  requireFreshGraph?: boolean
+  requireFreshContext?: boolean
   allowSnippets?: boolean
 }
 
@@ -54,6 +63,8 @@ export interface PromptCliOptions {
   prompt: string
   provider: PromptCliProvider
   graphPath: string
+  requireFreshGraph?: boolean
+  requireFreshContext?: boolean
 }
 
 export interface PathCliOptions {
@@ -210,9 +221,9 @@ export interface InstallCliOptions {
   platform: InstallPlatform
 }
 
-export interface TelemetryCliOptions {
-  action: 'enable' | 'disable' | 'status'
-}
+export type TelemetryCliOptions =
+  | { action: 'enable' | 'disable' | 'status' | 'clear' }
+  | { action: 'report'; spoolPaths: string[] }
 
 const COMPARE_USAGE = 'Usage: madar compare [question] --exec TEMPLATE [--graph path] [--questions PATH] [--output-dir DIR] [--task TASK] [--baseline-mode MODE] [--per-arm-timeout S] [--validation-timeout S] [--heartbeat-interval-ms N] [--strict-madar-first] [--strict] [--allow-no-install] [--yes] [--limit N] [--why]'
 
@@ -469,7 +480,7 @@ export function parseQueryArgs(args: string[]): QueryCliOptions {
 }
 
 export function parsePackArgs(args: string[]): PackCliOptions {
-  const usage = 'Usage: madar pack "<prompt>" [--budget N] [--task KIND] [--graph path] [--format json|text|markdown|claude|copilot] [--verbose] [--retrieval-level 0-5] [--retrieval-strategy default|slice-v1]'
+  const usage = 'Usage: madar pack "<prompt>" [--budget N] [--task KIND] [--graph path] [--format json|text|markdown|claude|copilot] [--verbose] [--retrieval-level 0-5] [--retrieval-strategy default|slice-v1] [--require-fresh-graph] [--require-fresh-context]'
   const prompt = args[0]?.trim()
   if (!prompt) {
     throw new UsageError(usage)
@@ -482,6 +493,8 @@ export function parsePackArgs(args: string[]): PackCliOptions {
   let format: PackCliOptions['format'] | undefined
   let why = false
   let verbose = false
+  let requireFreshGraph = false
+  let requireFreshContext = false
   let retrievalLevel: PackCliOptions['retrievalLevel'] | undefined
   let retrievalStrategy: PackCliOptions['retrievalStrategy'] | undefined
 
@@ -576,6 +589,16 @@ export function parsePackArgs(args: string[]): PackCliOptions {
       continue
     }
 
+    if (argument === '--require-fresh-graph') {
+      requireFreshGraph = true
+      continue
+    }
+
+    if (argument === '--require-fresh-context') {
+      requireFreshContext = true
+      continue
+    }
+
     if (argument === '--verbose') {
       verbose = true
       continue
@@ -590,6 +613,8 @@ export function parsePackArgs(args: string[]): PackCliOptions {
     task,
     ...(taskExplicit ? { taskExplicit: true } : {}),
     graphPath,
+    ...(requireFreshGraph ? { requireFreshGraph: true } : {}),
+    ...(requireFreshContext ? { requireFreshContext: true } : {}),
     ...(format ? { format } : {}),
     ...(why ? { why: true } : {}),
     ...(verbose ? { verbose: true } : {}),
@@ -598,8 +623,43 @@ export function parsePackArgs(args: string[]): PackCliOptions {
   }
 }
 
+export function parseTryArgs(args: string[]): TryCliOptions {
+  const usage = 'Usage: madar try "<question>" [path]'
+  const prompt = args[0]?.trim()
+  if (!prompt) {
+    throw new UsageError(usage)
+  }
+
+  let path = '.'
+  for (let index = 1; index < args.length; index += 1) {
+    const argument = args[index]
+    if (!argument) {
+      continue
+    }
+
+    if (argument.startsWith('--')) {
+      throw new UsageError(`error: unknown option for try: ${argument}`)
+    }
+
+    if (path !== '.') {
+      throw new UsageError(usage)
+    }
+
+    path = argument
+  }
+
+  if (path.length > MAX_CLI_PATH_LENGTH) {
+    throw new UsageError(`error: path exceeds maximum length of ${MAX_CLI_PATH_LENGTH} characters`)
+  }
+
+  return {
+    prompt: validateCliQuestionText('question', prompt),
+    path,
+  }
+}
+
 export function parseHandoffArgs(args: string[]): HandoffCliOptions {
-  const usage = 'Usage: madar handoff "<prompt>" [--budget N] [--task KIND] [--graph path] [--consumer generic|codex|cursor|copilot] [--allow-snippets]'
+  const usage = 'Usage: madar handoff "<prompt>" [--budget N] [--task KIND] [--graph path] [--consumer generic|codex|cursor|copilot] [--allow-snippets] [--require-fresh-graph] [--require-fresh-context]'
   const prompt = args[0]?.trim()
   if (!prompt) {
     throw new UsageError(usage)
@@ -610,6 +670,8 @@ export function parseHandoffArgs(args: string[]): HandoffCliOptions {
   let graphPath = 'out/graph.json'
   let consumer: HandoffCliOptions['consumer'] = 'generic'
   let allowSnippets = false
+  let requireFreshGraph = false
+  let requireFreshContext = false
 
   const normalizedPrompt = validateCliQuestionText('prompt', prompt)
 
@@ -676,6 +738,16 @@ export function parseHandoffArgs(args: string[]): HandoffCliOptions {
       continue
     }
 
+    if (argument === '--require-fresh-graph') {
+      requireFreshGraph = true
+      continue
+    }
+
+    if (argument === '--require-fresh-context') {
+      requireFreshContext = true
+      continue
+    }
+
     throw new UsageError(`error: unknown option for handoff: ${argument}`)
   }
 
@@ -685,6 +757,8 @@ export function parseHandoffArgs(args: string[]): HandoffCliOptions {
     task,
     graphPath,
     consumer,
+    ...(requireFreshGraph ? { requireFreshGraph: true } : {}),
+    ...(requireFreshContext ? { requireFreshContext: true } : {}),
     ...(allowSnippets ? { allowSnippets: true } : {}),
   }
 }
@@ -728,7 +802,7 @@ function parseRetrievalStrategy(value: string): PackCliOptions['retrievalStrateg
 }
 
 export function parsePromptArgs(args: string[]): PromptCliOptions {
-  const usage = 'Usage: madar prompt "<prompt>" --provider NAME [--graph path]'
+  const usage = 'Usage: madar prompt "<prompt>" --provider NAME [--graph path] [--require-fresh-graph] [--require-fresh-context]'
   const prompt = args[0]?.trim()
   if (!prompt) {
     throw new UsageError(usage)
@@ -736,6 +810,8 @@ export function parsePromptArgs(args: string[]): PromptCliOptions {
 
   let provider: PromptCliProvider | null = null
   let graphPath = 'out/graph.json'
+  let requireFreshGraph = false
+  let requireFreshContext = false
 
   const normalizedPrompt = validateCliQuestionText('prompt', prompt)
 
@@ -773,6 +849,16 @@ export function parsePromptArgs(args: string[]): PromptCliOptions {
       continue
     }
 
+    if (argument === '--require-fresh-graph') {
+      requireFreshGraph = true
+      continue
+    }
+
+    if (argument === '--require-fresh-context') {
+      requireFreshContext = true
+      continue
+    }
+
     throw new UsageError(`error: unknown option for prompt: ${argument}`)
   }
 
@@ -784,6 +870,8 @@ export function parsePromptArgs(args: string[]): PromptCliOptions {
     prompt: normalizedPrompt,
     provider,
     graphPath,
+    ...(requireFreshGraph ? { requireFreshGraph: true } : {}),
+    ...(requireFreshContext ? { requireFreshContext: true } : {}),
   }
 }
 
@@ -2088,14 +2176,17 @@ export function parseHookArgs(args: string[]): HookCliOptions {
 
 export function parseTelemetryArgs(args: string[]): TelemetryCliOptions {
   const action = args[0]
-  if (action === 'enable' || action === 'disable' || action === 'status') {
+  if (action === 'enable' || action === 'disable' || action === 'status' || action === 'clear') {
     if (args.length > 1) {
-      throw new UsageError('Usage: madar telemetry <enable|disable|status>')
+      throw new UsageError('Usage: madar telemetry <enable|disable|status|clear|report [spool.json ...]>')
     }
     return { action }
   }
+  if (action === 'report') {
+    return { action, spoolPaths: args.slice(1) }
+  }
 
-  throw new UsageError('Usage: madar telemetry <enable|disable|status>')
+  throw new UsageError('Usage: madar telemetry <enable|disable|status|clear|report [spool.json ...]>')
 }
 
 export function parseInstallArgs(args: string[], defaultPlatform: InstallPlatform): InstallCliOptions {

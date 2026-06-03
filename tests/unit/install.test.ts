@@ -198,7 +198,7 @@ function decodeHookPayloads(content: string): string {
       continue
     }
 
-    for (const match of current.matchAll(/'([A-Za-z0-9+/=]{40,})'/g)) {
+    for (const match of current.matchAll(/(?:['\"])?([A-Za-z0-9+/=]{40,})(?:['\"])?/g)) {
       const value = match[1]
       if (typeof value !== 'string' || seen.has(value)) {
         continue
@@ -640,6 +640,45 @@ describe('install helpers', () => {
     })
   })
 
+  it('installs UserPromptSubmit as a short project-local .cjs hook script', () => {
+    withTempDir((projectDir) => {
+      mkdirSync(join(projectDir, 'out'), { recursive: true })
+      writeFileSync(join(projectDir, 'out', 'graph.json'), '{}', 'utf8')
+      writeFileSync(join(projectDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8')
+      claudeInstall(projectDir)
+
+      const settings = readFileSync(join(projectDir, '.claude', 'settings.json'), 'utf8')
+      const command = extractHookCommand(settings, 'UserPromptSubmit')
+      const hookScriptPath = join(projectDir, '.claude', 'madar-user-prompt-submit.cjs')
+
+      expect(command).toBe('node .claude/madar-user-prompt-submit.cjs')
+      expect(command.length).toBeLessThan(80)
+      expect(existsSync(hookScriptPath)).toBe(true)
+
+      const output = runHookCommand(command, projectDir, {
+        prompt: 'Implement issue #275 by collecting implementation context for changed files',
+      })
+
+      expect(output).toContain('retrieve')
+
+      claudeUninstall(projectDir)
+      expect(existsSync(hookScriptPath)).toBe(false)
+    })
+  })
+
+  it('removes the generated Claude hook script even if settings.json is already gone', () => {
+    withTempDir((projectDir) => {
+      claudeInstall(projectDir)
+
+      const hookScriptPath = join(projectDir, '.claude', 'madar-user-prompt-submit.cjs')
+      rmSync(join(projectDir, '.claude', 'settings.json'), { force: true })
+
+      claudeUninstall(projectDir)
+
+      expect(existsSync(hookScriptPath)).toBe(false)
+    })
+  })
+
   it('injects Claude prompt guidance only for local code tasks', () => {
     withTempDir((projectDir) => {
       mkdirSync(join(projectDir, 'out'), { recursive: true })
@@ -685,14 +724,16 @@ describe('install helpers', () => {
 
       const message = claudeInstall(projectDir)
       const settings = readFileSync(join(projectDir, '.claude', 'settings.json'), 'utf8')
-      const decodedPayloads = decodeHookPayloads(settings)
+      const command = extractHookCommand(settings, 'UserPromptSubmit')
+      const hookScript = readFileSync(join(projectDir, '.claude', 'madar-user-prompt-submit.cjs'), 'utf8')
 
       expect(message).toContain('hook updated')
       expect(countOccurrences(settings, 'UserPromptSubmit')).toBe(1)
-      expect(decodedPayloads).not.toContain('3x fewer turns')
-      expect(decodedPayloads).toContain('Use the graph result as the first bounded pass')
-      expect(decodedPayloads).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN)
-      expect(decodedPayloads).toContain(STRICT_SKILL_OVERRIDE_RULE_PLAIN)
+      expect(command).toBe('node .claude/madar-user-prompt-submit.cjs')
+      expect(hookScript).not.toContain('3x fewer turns')
+      expect(hookScript).toContain('Use the graph result as the first bounded pass')
+      expect(hookScript).toContain(STRICT_NON_MADAR_MCP_RULE_PLAIN)
+      expect(hookScript).toContain(STRICT_SKILL_OVERRIDE_RULE_PLAIN)
     })
   })
 

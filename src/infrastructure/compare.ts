@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -8,7 +8,7 @@ import { KnowledgeGraph } from '../contracts/graph.js'
 import type { ContextSessionDiagnostics, ContextSessionState } from '../contracts/context-session.js'
 import { buildContextPrompt, type ContextPromptStableSection } from './context-prompt.js'
 import { buildAnswerReadyPackSchema, buildExplainPackPayloadCore } from './context-pack-command.js'
-import { isMadarProjectHook } from './install.js'
+import { CLAUDE_PROMPT_HOOK_SCRIPT_RELATIVE_PATH, isMadarProjectHook } from './install.js'
 import { CODE_EXTENSIONS, DOC_EXTENSIONS, MANIFEST_METADATA_KEY, OFFICE_EXTENSIONS, PAPER_EXTENSIONS } from '../pipeline/detect.js'
 import { extractCompareBaselineNonCodeText } from '../pipeline/extract/non-code.js'
 import { loadBenchmarkQuestions } from './benchmark/questions.js'
@@ -29,7 +29,7 @@ import { QUERY_TOKEN_ESTIMATOR, estimateQueryTokens, loadGraph } from '../runtim
 import { resolveToolProfileFromEnv, type McpToolProfile } from '../runtime/stdio/definitions.js'
 import { sidecarAwareFileFingerprint } from '../shared/binary-ingest-sidecar.js'
 import { sanitizeShareSafeText, toShareSafeArtifactPath, type ShareSafePathRoots } from '../shared/share-safe-artifacts.js'
-import { shellEscape } from '../shared/shell.js'
+import { resolveShellCommand, shellEscape } from '../shared/shell.js'
 import { MAX_TEXT_BYTES, validateGraphOutputPath, validateGraphPath } from '../shared/security.js'
 import { copyWorkspaceForBenchmark } from '../shared/workspace-copy.js'
 
@@ -566,16 +566,7 @@ async function defaultComparePromptRunner(execution: ComparePromptExecution): Pr
   const startedAt = Date.now()
 
   return await new Promise<ComparePromptRunnerResult>((resolveExecution, rejectExecution) => {
-    const command =
-      process.platform === 'win32'
-        ? {
-            file: 'powershell.exe',
-            args: ['-NoProfile', '-Command', execution.command],
-          }
-        : {
-            file: '/bin/sh',
-            args: ['-lc', execution.command],
-          }
+    const command = resolveShellCommand(execution.command)
     const child = spawn(command.file, command.args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -1986,21 +1977,58 @@ export function buildNativeAgentPrompt(
         'Call context_pack first for explain, review, impact, or runtime questions before any raw file or broad repo search.',
         'Inspect evidence.pack_confidence, evidence.coverage, evidence.agent_directive, missing_context, and recommended_first_read before deciding what to do next.',
         'If evidence.agent_directive is answer_from_pack, answer from the pack and stop without raw search.',
-        'Allow at most one focused Madar follow-up before raw search when evidence.agent_directive is verify_one_targeted_file or explore_with_caution.',
+        'Do not call community_overview, graph_summary, get_community, query_graph, or other broad graph-navigation tools for task-specific compare runs.',
+        'Allow at most one focused raw file read or search when evidence.agent_directive is verify_one_targeted_file or explore_with_caution.',
         'Broad raw search requires an explicit missing-context reason grounded in missing_context or coverage gaps.',
+        'If the pack is low confidence or incomplete, answer with a clear caveat after that one focused follow-up instead of continuing to explore.',
       ]
     : [
-        'Call retrieve first for explain or runtime questions before any raw file or broad repo search.',
+        'Call retrieve first for explain or runtime questions before any raw file or broad repo search. If the tool is deferred, use ToolSearch only to select mcp__madar__retrieve.',
         'Inspect matched_nodes, snippets, relationships, and community context before deciding what to do next.',
         'If retrieve already answers the question, answer from the retrieved evidence and stop without raw search.',
-        'Allow at most one focused Madar follow-up before raw search when retrieve leaves a specific gap.',
+        'Do not call community_overview, graph_summary, get_community, query_graph, or other broad graph-navigation tools for task-specific compare runs.',
+        'Allow at most one focused raw file read or search when retrieve leaves a specific gap.',
         'Broad raw search requires an explicit missing-context reason grounded in gaps from the retrieve result.',
+        'If retrieve is low confidence or incomplete, answer with a clear caveat after that one focused follow-up instead of continuing to explore.',
       ]
 
   return [
     'Follow the Madar pack contract exactly.',
     ...profileInstructions,
     'Any broad search before the first Madar call violates the prompt contract.',
+    'Keep the answer concise: key steps, key files, and caveats only.',
+    '',
+    `Question: ${question}`,
+    '',
+    'Answer:',
+    '',
+  ].join('\n')
+}
+
+function buildNativeAgentBaselinePrompt(
+  question: string,
+  options: {
+    task?: ContextPackTaskKind
+  } = {},
+): string {
+  if (options.task === 'implement') {
+    return [
+      'Implement the requested change using normal repository evidence.',
+      'Do not call Madar-specific tools or assume a Madar context pack is available.',
+      'Start with focused repository inspection, edit only files justified by the code you inspect, and run relevant validation before concluding.',
+      '',
+      `Question: ${question}`,
+      '',
+      'Answer:',
+      '',
+    ].join('\n')
+  }
+
+  return [
+    'Answer the question from normal repository evidence.',
+    'Do not call Madar-specific tools or assume a Madar context pack is available.',
+    'Start with focused repository inspection. Avoid broad repo-wide search unless a focused search does not find the needed files.',
+    'Name the key files and steps that support the answer.',
     '',
     `Question: ${question}`,
     '',
@@ -2723,6 +2751,8 @@ export interface NativeAgentCompareReport {
     share_safe_report: string
     baseline_answer: string
     madar_answer: string
+    baseline_prompt: string
+    madar_prompt: string
     prompt_file: string
   }
 }
@@ -2951,11 +2981,8 @@ async function runShellCommand(command: string, options: { cwd?: string; signal?
   stderr: string
 }> {
   return await new Promise((resolveExecution, rejectExecution) => {
-    const useProcessGroup = process.platform !== 'win32'
-    const shellCommand =
-      !useProcessGroup
-        ? { file: 'powershell.exe', args: ['-NoProfile', '-Command', command] }
-        : { file: '/bin/sh', args: ['-lc', command] }
+    const shellCommand = resolveShellCommand(command)
+    const useProcessGroup = shellCommand.useProcessGroup
     const child = spawn(shellCommand.file, shellCommand.args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -2967,6 +2994,19 @@ async function runShellCommand(command: string, options: { cwd?: string; signal?
 
     const handleAbort = () => {
       if (!useProcessGroup || child.pid === undefined) {
+        if (!useProcessGroup && child.pid !== undefined) {
+          try {
+            spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+              shell: false,
+              stdio: 'ignore',
+              windowsHide: true,
+            })
+            return
+          } catch {
+            child.kill()
+            return
+          }
+        }
         child.kill()
         return
       }
@@ -3147,6 +3187,8 @@ export function inspectClaudeNativeAgentInstall(projectRoot: string): NativeAgen
   const mcpPath = join(projectRoot, '.mcp.json')
   const claudeRulesPath = join(projectRoot, 'CLAUDE.md')
   const settingsPath = join(projectRoot, '.claude', 'settings.json')
+  const promptHookScriptPath = join(projectRoot, CLAUDE_PROMPT_HOOK_SCRIPT_RELATIVE_PATH)
+  const hasUserPromptSubmitHook = findHookEntry(settingsPath, 'UserPromptSubmit')
   const artifacts: NativeAgentInstallArtifactCheck[] = [
     {
       label: '.mcp.json',
@@ -3168,6 +3210,12 @@ export function inspectClaudeNativeAgentInstall(projectRoot: string): NativeAgen
         || findHookEntry(settingsPath, 'BeforeTool'),
       detail: '.claude/settings.json missing Madar hook',
       path: settingsPath,
+    },
+    {
+      label: CLAUDE_PROMPT_HOOK_SCRIPT_RELATIVE_PATH,
+      ok: !hasUserPromptSubmitHook || existsSync(promptHookScriptPath),
+      detail: `${CLAUDE_PROMPT_HOOK_SCRIPT_RELATIVE_PATH} missing generated Claude prompt hook script`,
+      path: promptHookScriptPath,
     },
   ]
 
@@ -3520,13 +3568,21 @@ function runStateDetails(statuses: {
   return details
 }
 
+function timedOutNativeAgentEvidence(timeoutMs: number, result?: NativeAgentRunnerResult): string {
+  const base = `Timed out after ${timeoutMs}ms`
+  if (!result || result.stdout.trim().length === 0) {
+    return base
+  }
+  return `${base}. Partial stdout was saved to the answer artifact.`
+}
+
 async function runNativeAgentArmWithTimeout(
   runner: NativeAgentRunner,
   input: NativeAgentRunnerInput,
   timeoutMs: number,
   heartbeatIntervalMs: number,
   writeStderr: (message: string) => void,
-): Promise<{ kind: 'completed'; result: NativeAgentRunnerResult } | { kind: 'timed_out' }> {
+): Promise<{ kind: 'completed'; result: NativeAgentRunnerResult } | { kind: 'timed_out'; result?: NativeAgentRunnerResult }> {
   const controller = new AbortController()
   const runnerPromise = runner({ ...input, signal: controller.signal })
 
@@ -3554,13 +3610,13 @@ async function runNativeAgentArmWithTimeout(
       // Wait for the runner to settle after abort, but don't wait forever.
       // A 200ms grace allows well-behaved runners to flush state before we finalize.
       Promise.race([
-        runnerPromise.then(() => {}, () => {}),
+        runnerPromise.then((result) => result, () => undefined),
         new Promise<void>((res) => { setTimeout(res, 200) }),
-      ]).then(() => {
+      ]).then((result) => {
         if (!settled) {
           settled = true
           cleanup()
-          resolveExecution({ kind: 'timed_out' } as const)
+          resolveExecution(result ? ({ kind: 'timed_out', result } as const) : ({ kind: 'timed_out' } as const))
         }
       }, () => {})
     }, timeoutMs)
@@ -3572,7 +3628,7 @@ async function runNativeAgentArmWithTimeout(
         }
         settled = true
         cleanup()
-        resolveExecution(timedOut ? ({ kind: 'timed_out' } as const) : ({ kind: 'completed', result } as const))
+        resolveExecution(timedOut ? ({ kind: 'timed_out', result } as const) : ({ kind: 'completed', result } as const))
       },
       (error) => {
         if (settled) {
@@ -4131,12 +4187,18 @@ export async function executeNativeAgentCompare(
           })
         : undefined
 
-    const promptFile = join(questionDir, 'native_agent-prompt.txt')
-    writeFileSync(promptFile, buildNativeAgentPrompt(question, {
+    const baselinePromptFile = join(questionDir, 'baseline-prompt.txt')
+    const madarPromptFile = join(questionDir, 'madar-prompt.txt')
+    const legacyPromptFile = join(questionDir, 'native_agent-prompt.txt')
+    const baselinePrompt = buildNativeAgentBaselinePrompt(question, { task })
+    const madarPrompt = buildNativeAgentPrompt(question, {
       profile: installCheck.tool_profile,
       task,
       ...(implementationGuidance ? { implementation: implementationGuidance } : {}),
-    }), 'utf8')
+    })
+    writeFileSync(baselinePromptFile, baselinePrompt, 'utf8')
+    writeFileSync(madarPromptFile, madarPrompt, 'utf8')
+    writeFileSync(legacyPromptFile, madarPrompt, 'utf8')
     const baselineAnswerPath = answerFilePath(questionDir, 'baseline')
     const madarAnswerPath = answerFilePath(questionDir, 'madar')
     const reportPath = join(questionDir, 'report.json')
@@ -4188,7 +4250,9 @@ export async function executeNativeAgentCompare(
         share_safe_report: shareSafeReportPath,
         baseline_answer: baselineAnswerPath,
         madar_answer: madarAnswerPath,
-        prompt_file: promptFile,
+        baseline_prompt: baselinePromptFile,
+        madar_prompt: madarPromptFile,
+        prompt_file: madarPromptFile,
       },
     }
     if (implementationGuidance) {
@@ -4211,7 +4275,8 @@ export async function executeNativeAgentCompare(
     }
     return {
       question,
-      promptFile,
+      baselinePromptFile,
+      madarPromptFile,
       baselineAnswerPath,
       madarAnswerPath,
       reportPath,
@@ -4237,7 +4302,8 @@ export async function executeNativeAgentCompare(
   for (const entry of preparedQuestions) {
     const {
       question,
-      promptFile,
+      baselinePromptFile,
+      madarPromptFile,
       baselineAnswerPath,
       madarAnswerPath,
       runStatePath,
@@ -4267,20 +4333,21 @@ export async function executeNativeAgentCompare(
       try {
         snapshot = snapshotMadarArtifacts(baselineWorkspace?.workspaceRoot ?? projectRoot, stamp)
       const baselineCommand = expandCompareExecTemplate(input.execTemplate, {
-        promptFile,
+        promptFile: baselinePromptFile,
         question,
         mode: 'baseline',
         outputFile: baselineAnswerPath,
       })
       let baselineRun: NativeAgentRunnerResult | null = null
       let baselineTimedOut = false
+      let baselineTimedOutResult: NativeAgentRunnerResult | undefined
       try {
         const baselineExecution = await runNativeAgentArmWithTimeout(
           runner,
           {
             mode: 'baseline',
             question,
-            promptFile,
+            promptFile: baselinePromptFile,
             outputFile: baselineAnswerPath,
             command: baselineCommand,
             ...(baselineWorkspace ? { cwd: baselineWorkspace.workspaceRoot, workspaceRoot: baselineWorkspace.workspaceRoot } : {}),
@@ -4291,6 +4358,7 @@ export async function executeNativeAgentCompare(
         )
         if (baselineExecution.kind === 'timed_out') {
           baselineTimedOut = true
+          baselineTimedOutResult = baselineExecution.result
         } else {
           baselineRun = baselineExecution.result
         }
@@ -4298,14 +4366,15 @@ export async function executeNativeAgentCompare(
         baselineCrashed = error
       }
       if (baselineTimedOut) {
+        const partialResult = baselineTimedOutResult
         reportShell.baseline = {
           kind: 'runner_error',
-          evidence: `Timed out after ${timeoutMs}ms`,
-          exit_code: null,
-          stderr: null,
+          evidence: timedOutNativeAgentEvidence(timeoutMs, partialResult),
+          exit_code: partialResult?.exitCode ?? null,
+          stderr: partialResult ? sanitizeCompareStderr(partialResult.stderr) : null,
           failure_reason: 'timed_out',
         }
-        ensureCompareAnswerFile(baselineAnswerPath, '')
+        ensureCompareAnswerFile(baselineAnswerPath, partialResult?.stdout ?? '')
         writeNativeAgentRunState(runStatePath, {
           phase: 'baseline_timed_out',
           arm: 'baseline',
@@ -4398,7 +4467,7 @@ export async function executeNativeAgentCompare(
       ...runStateDetails({ baseline: reportShell.baseline }),
       })
       const madarCommand = expandCompareExecTemplate(input.execTemplate, {
-      promptFile,
+      promptFile: madarPromptFile,
       question,
       mode: 'madar',
       outputFile: madarAnswerPath,
@@ -4411,7 +4480,7 @@ export async function executeNativeAgentCompare(
         {
           mode: 'madar',
           question,
-          promptFile,
+          promptFile: madarPromptFile,
           outputFile: madarAnswerPath,
           command: madarCommand,
           ...(madarWorkspace ? { cwd: madarWorkspace.workspaceRoot, workspaceRoot: madarWorkspace.workspaceRoot } : {}),
@@ -4421,14 +4490,16 @@ export async function executeNativeAgentCompare(
         writeStderr,
         )
         if (madarExecution.kind === 'timed_out') {
+        const partialResult = madarExecution.result
+        madarToolCallCounts = partialResult ? extractNativeAgentToolCallCounts(partialResult.stdout) : null
         reportShell.madar = {
           kind: 'runner_error',
-          evidence: `Timed out after ${timeoutMs}ms`,
-          exit_code: null,
-          stderr: null,
+          evidence: timedOutNativeAgentEvidence(timeoutMs, partialResult),
+          exit_code: partialResult?.exitCode ?? null,
+          stderr: partialResult ? sanitizeCompareStderr(partialResult.stderr) : null,
           failure_reason: 'timed_out',
         }
-        ensureCompareAnswerFile(madarAnswerPath, '')
+        ensureCompareAnswerFile(madarAnswerPath, partialResult?.stdout ?? '')
         writeNativeAgentRunState(runStatePath, {
           phase: 'madar_timed_out',
           arm: 'madar',
@@ -4658,6 +4729,8 @@ function writeNativeAgentReport(report: NativeAgentCompareReport): void {
       share_safe_report: portablePath(report.paths.share_safe_report),
       baseline_answer: portablePath(report.paths.baseline_answer),
       madar_answer: portablePath(report.paths.madar_answer),
+      baseline_prompt: portablePath(report.paths.baseline_prompt),
+      madar_prompt: portablePath(report.paths.madar_prompt),
       prompt_file: portablePath(report.paths.prompt_file),
     },
   }

@@ -16,6 +16,7 @@ import { projectSpiToExtraction } from '../pipeline/spi/projector.js'
 import { generate as generateReport } from '../pipeline/report.js'
 import { toWiki } from '../pipeline/wiki.js'
 import { loadGraph } from '../runtime/serve.js'
+import { buildGraphBuildFreshnessMetadata } from '../shared/graph-build-freshness.js'
 
 export type ProgressStep =
   | { step: 'detect'; message: string }
@@ -85,6 +86,18 @@ export interface GenerateGraphCacheSummary {
   hit: boolean
   reason: SpiCacheStats['reason']
   fileCount: number
+}
+
+export type GenerateUnsupportedCorpusCode = 'NO_SUPPORTED_FILES' | 'NO_GRAPH_NODES'
+
+export class GenerateUnsupportedCorpusError extends Error {
+  readonly code: GenerateUnsupportedCorpusCode
+
+  constructor(code: GenerateUnsupportedCorpusCode, message: string) {
+    super(message)
+    this.name = 'GenerateUnsupportedCorpusError'
+    this.code = code
+  }
 }
 
 type IncrementalDetectResult = ReturnType<typeof detectIncremental>
@@ -215,6 +228,13 @@ function missingCodeExtractionMessage(totalFiles: number): string {
   }
 
   return 'No graph nodes could be generated from the detected corpus. The current TypeScript extractor supports Python, JavaScript/TypeScript, documents, text-like papers, and image assets, but some detected formats still have shallow coverage.'
+}
+
+function missingCodeExtractionError(totalFiles: number): GenerateUnsupportedCorpusError {
+  return new GenerateUnsupportedCorpusError(
+    totalFiles === 0 ? 'NO_SUPPORTED_FILES' : 'NO_GRAPH_NODES',
+    missingCodeExtractionMessage(totalFiles),
+  )
 }
 
 export function loadGraphExtractorVersion(graphPath: string): number | null {
@@ -403,11 +423,11 @@ export function generateGraph(rootPath = '.', options: GenerateGraphOptions = {}
           : null
 
   if (!graph) {
-    throw new Error(missingCodeExtractionMessage(detected.total_files))
+    throw missingCodeExtractionError(detected.total_files)
   }
 
   if (!options.clusterOnly && graph.numberOfNodes() === 0) {
-    throw new Error(missingCodeExtractionMessage(detected.total_files))
+    throw missingCodeExtractionError(detected.total_files)
   }
 
   progress?.({ step: 'build', message: `Built graph: ${graph.numberOfNodes()} nodes, ${graph.numberOfEdges()} edges` })
@@ -441,6 +461,13 @@ export function generateGraph(rootPath = '.', options: GenerateGraphOptions = {}
   if (options.useSpi) {
     graph.graph.spi_mode = true
   }
+  graph.graph.graph_build_freshness = buildGraphBuildFreshnessMetadata(
+    resolvedRootPath,
+    graph
+      .nodeEntries()
+      .map(([, attributes]) => String(attributes.source_file ?? '').trim())
+      .filter((sourceFile) => sourceFile.length > 0),
+  )
 
   progress?.({ step: 'export', message: 'Writing outputs...' })
   writeFileSync(reportPath, `${report}\n`, 'utf8')

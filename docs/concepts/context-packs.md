@@ -30,6 +30,10 @@ The implement brief keeps `recommended_first_read` separate from ranked `likely_
 
 Use `--format json` when another tool or script will consume the pack directly. Use `--format text` when you want the same schema rendered as a short human/agent-readable execution brief.
 
+Packs also carry a machine-readable graph freshness receipt so the consumer can decide whether the compiled context is safe to trust as a deterministic first pass. `madar pack` / `madar handoff` expose that receipt under `governance.graph_freshness`; `madar prompt` exposes the same contract at top-level `graph_freshness`. On git workspaces the receipt is driven by the graph build commit plus dirty-file snapshot compared with the current HEAD and working-tree diff; non-git workspaces fall back to stored file fingerprints. The overall status values are `fresh`, `partially_stale`, `possibly_stale`, `stale`, and `missing`, and the receipt also reports selected context freshness so unrelated indexed changes can stay allowed by default.
+
+Use `--require-fresh-context` on `madar pack`, `madar prompt`, or `madar handoff` when you want the command to refuse selected context drift. Use `--require-fresh-graph` when you want to refuse any repo drift at all. The MCP equivalents are `require_fresh_context` and `require_fresh_graph` on `context_pack` and `context_prompt`. `madar doctor` and `madar status` reuse the same freshness model so the remediation path stays consistent before an agent starts broader exploration, and the share-safe governance receipt keeps freshness counts without leaking the local graph path.
+
 ## Adaptive context-pack representations
 
 Compiled context packs have a first-pass rendering-only adaptive layer. Retrieval still selects the same nodes and paths first; the runtime only changes how those already-selected nodes are emitted for the task.
@@ -57,7 +61,7 @@ Runtime-generation prompts stay compact by following the strongest backend path 
 
 ## When to use `--spi`
 
-`--spi` is still opt-in in `0.27.8`. Use it when your repo is framework-heavy TypeScript/JavaScript and you want extra framework-shaped metadata plus disk cache behavior.
+`--spi` is still opt-in in `0.27.9-next.0`. Use it when your repo is framework-heavy TypeScript/JavaScript and you want extra framework-shaped metadata plus disk cache behavior.
 
 `--spi` is usually worth it for NestJS, Next.js App Router, Prisma, tRPC, Hono, Fastify, and similar repos where users ask storage-oriented prompts, client/server boundary questions, or request-flow questions. The default pipeline is still fine for simpler repos, non-JS/TS workspaces, or quick first runs when you do not need the extra framework detail yet.
 
