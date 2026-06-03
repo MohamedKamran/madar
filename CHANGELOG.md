@@ -2,6 +2,12 @@
 
 All notable changes to the TypeScript package will be documented in this file.
 
+## [0.27.9-next.5] - 2026-06-04
+
+### Fixed
+
+- **Native-agent compare prompts are stricter and timeout artifacts keep partial evidence**: task-scoped compare prompts now forbid broad graph-navigation detours, limit raw follow-up exploration to one focused read/search with concise caveats when confidence stays low, and timed-out native-agent arms now preserve any settled stdout/stderr in the saved answer/report artifacts instead of discarding that partial evidence.
+
 ## [0.27.9-next.4] - 2026-06-03
 
 ### Fixed
