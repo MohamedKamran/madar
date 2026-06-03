@@ -129,10 +129,11 @@ The current telemetry model is local-first and source-safe. It records coarse fu
 
 ## What's New
 
-See the [`0.27.9-next.4` changelog entry](https://github.com/mohanagy/madar/blob/next/CHANGELOG.md#0279-next4---2026-06-03) for the full release notes.
+See the [`0.27.9-next.5` changelog entry](https://github.com/mohanagy/madar/blob/next/CHANGELOG.md#0279-next5---2026-06-04) for the full release notes.
 
 Recent highlights:
 
+- `0.27.9-next.5` tightens native-agent compare prompts so task-specific runs stay bounded, and it preserves partial stdout/stderr when a timed-out arm settles after abort.
 - `0.27.9-next.4` splits native-agent compare prompt artifacts into explicit baseline and Madar files, records both paths in `report.json`, and keeps the legacy `prompt_file` field aligned with the Madar prompt for compatibility.
 - `0.27.9-next.3` replaces the Claude `UserPromptSubmit` inline shell command with a generated local `.claude/madar-user-prompt-submit.cjs` script, fixing the Windows shell truncation that still broke `0.27.9-next.2`.
 - `0.27.9-next.2` was the intermediate attempt to shrink the Windows Claude hook command, but it still left the installed shell command too large in production.
@@ -148,7 +149,7 @@ Recent highlights:
 
 ## When To Use `--spi`
 
-`--spi` is still opt-in in `0.27.9-next.4`. Use it when your repo is framework-heavy TypeScript/JavaScript and you want extra framework-shaped metadata plus disk cache behavior.
+`--spi` is still opt-in in `0.27.9-next.5`. Use it when your repo is framework-heavy TypeScript/JavaScript and you want extra framework-shaped metadata plus disk cache behavior.
 
 It is usually worth it for NestJS, Next.js App Router, Prisma, tRPC, Hono, Fastify, and similar repos where users ask storage-oriented prompts, client/server boundary questions, or request-flow questions. The default pipeline is still fine for simpler repos, non-JS/TS workspaces, or first runs where you do not need the extra framework detail yet.
 
