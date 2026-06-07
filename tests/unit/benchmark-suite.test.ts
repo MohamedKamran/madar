@@ -335,7 +335,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/documenso/documenso',
-          ref: 'main',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
       expect.objectContaining({
@@ -344,7 +344,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/formbricks/formbricks',
-          ref: 'main',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
       expect.objectContaining({
@@ -353,7 +353,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/dubinc/dub',
-          ref: 'main',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
       expect.objectContaining({
@@ -362,7 +362,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/twentyhq/twenty',
-          ref: 'main',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
       expect.objectContaining({
@@ -371,7 +371,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/calcom/cal.diy',
-          ref: 'main',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
       expect.objectContaining({
@@ -380,7 +380,7 @@ describe('benchmark suite manifests', () => {
         source: expect.objectContaining({
           kind: 'git',
           url: 'https://github.com/novuhq/novu',
-          ref: 'next',
+          ref: expect.stringMatching(/^[0-9a-f]{40}$/),
         }),
       }),
     ]))
@@ -1628,6 +1628,7 @@ describe('runBenchmarkSuite', () => {
   it('clones git-backed repos and provisions the benchmark workspace before compare', async () => {
     await withTempDir(async (tempDir) => {
       const sourceRepoPath = initializeGitRepo(createFixtureRepo(join(tempDir, 'repos', 'documenso-source'), { install: false }))
+      const pinnedSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRepoPath, encoding: 'utf8', stdio: 'pipe' }).trim()
       const repos: BenchmarkSuiteRepo[] = [
         {
           id: 'documenso',
@@ -1635,7 +1636,7 @@ describe('runBenchmarkSuite', () => {
           source: {
             kind: 'git',
             url: sourceRepoPath,
-            ref: 'main',
+            ref: pinnedSha,
           },
           description: 'Git-backed benchmark repo',
           size: 'large',
@@ -2010,6 +2011,7 @@ describe('runBenchmarkSuite', () => {
         }),
       ]))
       expect(result.summary?.cells_skipped_for_install).toBe(1)
+      expect(result.text).toContain('1 skipped during preparation')
     })
   })
 
