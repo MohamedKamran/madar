@@ -88,9 +88,11 @@ describe('benchmark suite isolation docs', () => {
   it.skipIf(process.platform === 'win32')('fails fast when the default Claude profile is logged in but the isolated profile is not', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'madar-bench-isolation-auth-'))
     const binDir = join(tempDir, 'bin')
+    const mockCliPath = join(tempDir, 'mock-cli.js')
     const nodeCalledPath = join(tempDir, 'node-called')
     try {
       mkdirSync(binDir, { recursive: true })
+      writeFileSync(mockCliPath, 'console.log("mock cli")\n', 'utf8')
       const fakeClaudePath = join(binDir, 'claude')
       writeFileSync(fakeClaudePath, `#!/usr/bin/env bash
 set -euo pipefail
@@ -122,6 +124,7 @@ exit 0
         stdio: 'pipe',
         env: {
           ...process.env,
+          MADAR_BENCH_CLI_PATH: mockCliPath,
           PATH: `${binDir}:${process.env.PATH ?? ''}`,
         },
       })).toThrowError(expect.objectContaining({
@@ -136,9 +139,11 @@ exit 0
   it.skipIf(process.platform === 'win32')('prints only the isolated runtime-profile login command when no Claude profile is authenticated', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'madar-bench-isolation-auth-none-'))
     const binDir = join(tempDir, 'bin')
+    const mockCliPath = join(tempDir, 'mock-cli.js')
     const nodeCalledPath = join(tempDir, 'node-called')
     try {
       mkdirSync(binDir, { recursive: true })
+      writeFileSync(mockCliPath, 'console.log("mock cli")\n', 'utf8')
       const fakeClaudePath = join(binDir, 'claude')
       writeFileSync(fakeClaudePath, `#!/usr/bin/env bash
 set -euo pipefail
@@ -166,6 +171,7 @@ exit 0
         stdio: 'pipe',
         env: {
           ...process.env,
+          MADAR_BENCH_CLI_PATH: mockCliPath,
           PATH: `${binDir}:${process.env.PATH ?? ''}`,
         },
       })).toThrowError(expect.objectContaining({
@@ -180,6 +186,7 @@ exit 0
           stdio: 'pipe',
           env: {
             ...process.env,
+            MADAR_BENCH_CLI_PATH: mockCliPath,
             PATH: `${binDir}:${process.env.PATH ?? ''}`,
           },
         })
