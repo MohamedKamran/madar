@@ -443,6 +443,28 @@ function copyWorkspace(sourceRoot: string, targetRoot: string): void {
 
 function cloneBenchmarkSuiteRepo(source: BenchmarkSuiteRepoGitSource, targetRoot: string): void {
   mkdirSync(dirname(targetRoot), { recursive: true })
+  if (source.ref && /^[0-9a-f]{7,40}$/i.test(source.ref)) {
+    execFileSync('git', ['init', targetRoot], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    execFileSync('git', ['remote', 'add', 'origin', source.url], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    execFileSync('git', ['fetch', '--depth', '1', 'origin', source.ref], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    execFileSync('git', ['checkout', '--detach', 'FETCH_HEAD'], {
+      cwd: targetRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return
+  }
   const args = ['clone', '--depth', '1', '--single-branch']
   if (source.ref) {
     args.push('--branch', source.ref)
@@ -759,7 +781,7 @@ function formatBenchmarkSuiteSummaryMarkdown(summary: BenchmarkSuiteSummary): st
     '',
     `- Generated: ${summary.completed_at}`,
     `- Filters: repo=${summary.filters.repo ?? 'all'}, task=${summary.filters.task ?? 'all'}, mode=${summary.filters.mode}, trials=${summary.filters.trials}`,
-    `- cells_skipped_for_install: ${summary.cells_skipped_for_install}`,
+    `- cells_skipped_for_install: ${summary.cells_skipped_for_install} (preparation failures)`,
     `- Cells skipped for env drift: ${summary.cells_skipped_for_env_drift}`,
     '- Per-repo rows only.',
     '',
@@ -1138,7 +1160,7 @@ export async function runBenchmarkSuite(
   }
   cellSummaryParts.push(`${plannedCount} planned`)
   if (skippedCount > 0) {
-    cellSummaryParts.push(`${skippedCount} skipped for install`)
+    cellSummaryParts.push(`${skippedCount} skipped during preparation`)
   }
 
   return {
