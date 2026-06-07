@@ -1913,11 +1913,12 @@ function prepareNativeAgentBenchmarkReadiness(input: {
 
   const rescopedGraph = input.graphCache.get(rescopedGraphPath) ?? loadGraph(rescopedGraphPath)
   input.graphCache.set(rescopedGraphPath, rescopedGraph)
+  const rescopedProjectRoot = realpathSync(inferProjectRootFromGraphPath(rescopedGraphPath))
   const rescopedRetrieval = retrieveCompareContext(
     rescopedGraph,
     input.question,
     input.budget,
-    input.projectRoot,
+    rescopedProjectRoot,
     input.taskKind,
   )
   const rescopedReadiness = assessBenchmarkReadinessFromRetrieveResult({

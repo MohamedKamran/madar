@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -23,6 +23,18 @@ const COMPARE_OUTPUT_PARENT = resolve('out', 'compare', 'test-runtime-native-age
 
 function writeClaudeInstallArtifacts(projectDir: string): void {
   claudeInstall(projectDir)
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function writeLineAnchoredSourceFile(filePath: string, lineNumber: number, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true })
+  const lines = Array.from({ length: lineNumber }, (_, index) => (
+    index === lineNumber - 1 ? content : `// filler ${index + 1}`
+  ))
+  writeFileSync(filePath, `${lines.join('\n')}\n`, 'utf8')
 }
 
 function makeFixtureProject(
@@ -243,6 +255,7 @@ function makeRescopedReadinessFixtureProject(): {
 function makeRescopedReadinessFixtureProjectWithOptions(options: {
   includePersistenceStep?: boolean
   includeScopedGraph?: boolean
+  scopedGraphUsesScopedRoot?: boolean
 } = {}): {
   projectDir: string
   graphPath: string
@@ -251,8 +264,41 @@ function makeRescopedReadinessFixtureProjectWithOptions(options: {
   const { projectDir, outputDir } = makeFixtureProject()
   const includePersistenceStep = options.includePersistenceStep ?? true
   const includeScopedGraph = options.includeScopedGraph ?? true
+  const scopedGraphUsesScopedRoot = options.scopedGraphUsesScopedRoot ?? false
   if (includeScopedGraph) {
     mkdirSync(join(projectDir, 'backend', 'out'), { recursive: true })
+  }
+  writeLineAnchoredSourceFile(
+    join(projectDir, 'backend', 'src', 'auth', 'routes.ts'),
+    10,
+    'export const backendLoginRoute = "backend-login-route"',
+  )
+  writeLineAnchoredSourceFile(
+    join(projectDir, 'backend', 'src', 'auth', 'controller.ts'),
+    20,
+    'export const backendLoginController = "backend-controller-proof"',
+  )
+  writeLineAnchoredSourceFile(
+    join(projectDir, 'backend', 'src', 'auth', 'service.ts'),
+    30,
+    'export const backendLoginService = "backend-service-proof"',
+  )
+  writeLineAnchoredSourceFile(
+    join(projectDir, 'backend', 'src', 'queue', 'registry.ts'),
+    40,
+    'export const backendQueueRegistry = "backend-queue-proof"',
+  )
+  writeLineAnchoredSourceFile(
+    join(projectDir, 'backend', 'src', 'auth', 'worker.ts'),
+    50,
+    'export const backendLoginWorker = "backend-worker-proof"',
+  )
+  if (includePersistenceStep) {
+    writeLineAnchoredSourceFile(
+      join(projectDir, 'backend', 'src', 'session', 'store.ts'),
+      60,
+      'export const backendSessionStore = "backend-session-persist"',
+    )
   }
 
   const graph = build(
@@ -305,6 +351,22 @@ function makeRescopedReadinessFixtureProjectWithOptions(options: {
       scopedGraphPath,
     )
     const scopedGraph = JSON.parse(readFileSync(scopedGraphPath, 'utf8')) as Record<string, unknown>
+    if (scopedGraphUsesScopedRoot) {
+      const scopedRoot = join(projectDir, 'backend')
+      scopedGraph.root_path = scopedRoot
+      const scopedNodes = Array.isArray(scopedGraph.nodes) ? scopedGraph.nodes : []
+      for (const node of scopedNodes) {
+        if (isObjectRecord(node) && typeof node.source_file === 'string') {
+          node.source_file = relative(scopedRoot, node.source_file).replaceAll('\\', '/')
+        }
+      }
+      const scopedLinks = Array.isArray(scopedGraph.links) ? scopedGraph.links : []
+      for (const link of scopedLinks) {
+        if (isObjectRecord(link) && typeof link.source_file === 'string') {
+          link.source_file = relative(scopedRoot, link.source_file).replaceAll('\\', '/')
+        }
+      }
+    }
     scopedGraph.spi_mode = true
     writeFileSync(scopedGraphPath, `${JSON.stringify(scopedGraph, null, 2)}\n`, 'utf8')
   }
@@ -1743,6 +1805,54 @@ describe('executeNativeAgentCompare', () => {
       }))
       expect(summary).toContain('benchmark_readiness: ready')
       expect(summary).toContain('auto-rescoped to backend/out/graph.json')
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps strict runtime benchmark readiness ready when the rescoped graph uses its own project root', async () => {
+    const { projectDir, graphPath, outputDir } = makeRescopedReadinessFixtureProjectWithOptions({
+      scopedGraphUsesScopedRoot: true,
+    })
+    try {
+      const result = await executeNativeAgentCompare(
+        {
+          graphPath,
+          question: 'Trace how `POST /login` reaches persistence in the backend runtime pipeline',
+          outputDir,
+          execTemplate: 'mock-runner',
+          baselineMode: 'native_agent',
+        },
+        {
+          runner: scriptedRunner({
+            baseline: VERBOSE_BASELINE_FULL_WIN_PAYLOAD,
+            madar: VERBOSE_MADAR_FULL_WIN_PAYLOAD,
+          }),
+          now: () => new Date('2026-05-27T00:45:00Z'),
+        },
+      )
+
+      const report = result.reports[0] as NativeAgentCompareReport & {
+        benchmark_readiness?: {
+          status: 'ready' | 'degraded' | 'not_ready'
+          reasons: string[]
+          suggested_graph_scope: string | null
+          rescope_attempted?: boolean
+          rescoped_to?: string | null
+        }
+      }
+      const summary = formatNativeAgentCompareSummary(result)
+      const madarPrompt = readFileSync(report.paths.madar_prompt, 'utf8')
+
+      expect(report.benchmark_readiness).toEqual(expect.objectContaining({
+        status: 'ready',
+        suggested_graph_scope: null,
+        rescope_attempted: true,
+        rescoped_to: 'backend/out/graph.json',
+      }))
+      expect(summary).toContain('benchmark_readiness: ready')
+      expect(madarPrompt).toContain('Start from the auto-rescoped graph scope: backend/out/graph.json.')
+      expect(madarPrompt).not.toContain('missing persistence')
     } finally {
       rmSync(projectDir, { recursive: true, force: true })
     }
