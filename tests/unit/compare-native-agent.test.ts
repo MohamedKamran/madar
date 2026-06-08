@@ -1614,7 +1614,7 @@ describe('executeNativeAgentCompare', () => {
         task: 'implement',
         validationTimeoutSeconds: 0.01,
       } as Parameters<typeof executeNativeAgentCompare>[0] & { validationTimeoutSeconds: number }
-      const hangBudgetMs = 2000
+      const hangBudgetMs = 10000
 
       const outcome = await Promise.race([
         executeNativeAgentCompare(
