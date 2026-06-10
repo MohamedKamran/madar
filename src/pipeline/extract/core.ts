@@ -26,8 +26,8 @@ function buildFileStemMap(filePaths: Iterable<string>): Map<string, string> {
   const normalizedPaths = [...new Set([...filePaths].map((filePath) => normalizeStemPath(filePath)))]
   const stemCounts = new Map<string, number>()
   for (const filePath of normalizedPaths) {
-    const stem = basename(filePath, extname(filePath))
-    stemCounts.set(stem, (stemCounts.get(stem) ?? 0) + 1)
+    const stemId = _makeId(basename(filePath, extname(filePath)))
+    stemCounts.set(stemId, (stemCounts.get(stemId) ?? 0) + 1)
   }
 
   let commonRoot = ''
@@ -47,7 +47,7 @@ function buildFileStemMap(filePaths: Iterable<string>): Map<string, string> {
   const stems = new Map<string, string>()
   for (const filePath of normalizedPaths) {
     const basenameStem = basename(filePath, extname(filePath))
-    if ((stemCounts.get(basenameStem) ?? 0) <= 1) {
+    if ((stemCounts.get(_makeId(basenameStem)) ?? 0) <= 1) {
       stems.set(filePath, basenameStem)
       continue
     }
@@ -58,6 +58,21 @@ function buildFileStemMap(filePaths: Iterable<string>): Map<string, string> {
       : withoutExtension.replace(/^[A-Za-z]:\//, '').replace(/^\//, '')
     const segments = relativeStem.split('/').filter(Boolean)
     stems.set(filePath, segments.length > 0 ? segments.join('_') : basenameStem)
+  }
+
+  const assignedStemIds = new Set<string>()
+  for (const filePath of [...normalizedPaths].sort()) {
+    const stem = stems.get(filePath)!
+    let uniqueStem = stem
+    if (assignedStemIds.has(_makeId(uniqueStem))) {
+      let suffix = 2
+      while (assignedStemIds.has(_makeId(`${stem}_${suffix}`))) {
+        suffix += 1
+      }
+      uniqueStem = `${stem}_${suffix}`
+      stems.set(filePath, uniqueStem)
+    }
+    assignedStemIds.add(_makeId(uniqueStem))
   }
 
   return stems

@@ -27,12 +27,12 @@ describe('benchmark suite docs', () => {
     expect(content).toContain('review')
     expect(content).toContain('impact')
     expect(content).toContain('git-backed public repos')
-    expect(content).toContain('results/2026-06-10T04-39-55/summary.md')
-    expect(content).toContain('results/2026-06-10T04-48-49/summary.md')
-    expect(content).toContain('results/2026-06-10T05-03-03/summary.md')
-    expect(content).toContain('results/2026-06-10T05-18-23/summary.md')
-    expect(content).toContain('results/2026-06-10T05-46-15/summary.md')
-    expect(content).toContain('results/2026-06-10T06-03-05/summary.md')
+    expect(content).toContain('results/2026-06-10T07-01-18/summary.md')
+    expect(content).toContain('results/2026-06-10T07-10-44/summary.md')
+    expect(content).toContain('results/2026-06-10T07-24-01/summary.md')
+    expect(content).toContain('results/2026-06-10T07-39-11/summary.md')
+    expect(content).toContain('results/2026-06-10T08-08-44/summary.md')
+    expect(content).toContain('results/2026-06-10T08-24-49/summary.md')
     expect(content).toContain('quality-gates.json')
     expect(content).toContain('permission-blocked answers are not benchmark wins')
     expect(content).toContain('--allowedTools mcp__madar__retrieve')
@@ -81,32 +81,32 @@ describe('benchmark suite docs', () => {
   it('checks in the latest public-repo summary receipts', () => {
     const rows = [
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T04-39-55/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T07-01-18/summary.md',
         repo: 'documenso',
         outcome: 'legacy: full_win',
       },
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T04-48-49/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T07-10-44/summary.md',
         repo: 'formbricks',
         outcome: 'legacy: full_win',
       },
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T05-03-03/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T07-24-01/summary.md',
         repo: 'dub',
         outcome: 'legacy: full_win',
       },
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T05-18-23/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T07-39-11/summary.md',
         repo: 'twenty',
         outcome: 'legacy: full_win',
       },
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T05-46-15/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T08-08-44/summary.md',
         repo: 'cal-diy',
         outcome: 'legacy: full_win',
       },
       {
-        path: 'docs/benchmarks/suite/results/2026-06-10T06-03-05/summary.md',
+        path: 'docs/benchmarks/suite/results/2026-06-10T08-24-49/summary.md',
         repo: 'novu',
         outcome: 'legacy: full_win',
       },
@@ -125,12 +125,12 @@ describe('benchmark suite docs', () => {
 
   it('keeps baseline prompt artifacts tool-agnostic in the latest public receipts', () => {
     const roots = [
-      'docs/benchmarks/suite/results/2026-06-10T04-39-55/raw/documenso/explain-runtime/warm-cache/legacy/trial-001',
-      'docs/benchmarks/suite/results/2026-06-10T04-48-49/raw/formbricks/explain-runtime/warm-cache/legacy/trial-001',
-      'docs/benchmarks/suite/results/2026-06-10T05-03-03/raw/dub/explain-runtime/warm-cache/legacy/trial-001',
-      'docs/benchmarks/suite/results/2026-06-10T05-18-23/raw/twenty/explain-runtime/warm-cache/legacy/trial-001',
-      'docs/benchmarks/suite/results/2026-06-10T05-46-15/raw/cal-diy/explain-runtime/warm-cache/legacy/trial-001',
-      'docs/benchmarks/suite/results/2026-06-10T06-03-05/raw/novu/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T07-01-18/raw/documenso/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T07-10-44/raw/formbricks/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T07-24-01/raw/dub/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T07-39-11/raw/twenty/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T08-08-44/raw/cal-diy/explain-runtime/warm-cache/legacy/trial-001',
+      'docs/benchmarks/suite/results/2026-06-10T08-24-49/raw/novu/explain-runtime/warm-cache/legacy/trial-001',
     ]
 
     for (const root of roots) {
@@ -169,12 +169,12 @@ describe('benchmark suite docs', () => {
     expect(claims).toContain('original fixture-style bundle')
     expect(claims).toContain('deterministic answer-quality gates')
     expect(claims).toContain('permission-blocked answers are not benchmark wins')
-    expect(claims).toContain('results/2026-06-10T04-39-55/summary.md')
-    expect(claims).toContain('results/2026-06-10T04-48-49/summary.md')
-    expect(claims).toContain('results/2026-06-10T05-03-03/summary.md')
-    expect(claims).toContain('results/2026-06-10T05-18-23/summary.md')
-    expect(claims).toContain('results/2026-06-10T05-46-15/summary.md')
-    expect(claims).toContain('results/2026-06-10T06-03-05/summary.md')
+    expect(claims).toContain('results/2026-06-10T07-01-18/summary.md')
+    expect(claims).toContain('results/2026-06-10T07-10-44/summary.md')
+    expect(claims).toContain('results/2026-06-10T07-24-01/summary.md')
+    expect(claims).toContain('results/2026-06-10T07-39-11/summary.md')
+    expect(claims).toContain('results/2026-06-10T08-08-44/summary.md')
+    expect(claims).toContain('results/2026-06-10T08-24-49/summary.md')
     expect(claims).toContain('full_win')
     expect(claims).toContain('missing_obligations = []')
     expect(claims).toContain('repo/task-specific TypeScript legacy-row claim')

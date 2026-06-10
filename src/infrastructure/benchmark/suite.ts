@@ -542,7 +542,11 @@ function resetBenchmarkWorkspaceConfig(workspaceRoot: string): void {
 }
 
 function benchmarkWorkspaceCliPath(): string {
-  return join(findPackageRoot(), 'dist', 'src', 'cli', 'bin.js')
+  const cliPath = join(findPackageRoot(), 'dist', 'src', 'cli', 'bin.js')
+  if (!existsSync(cliPath)) {
+    throw new Error(`Benchmark suite requires the built CLI at ${portablePath(cliPath)}. Run npm run build first.`)
+  }
+  return cliPath
 }
 
 function writeBenchmarkWorkspaceCliShim(workspaceRoot: string): string {

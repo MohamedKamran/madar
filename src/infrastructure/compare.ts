@@ -1643,7 +1643,8 @@ function traceFocusedFollowUpInputs(trace: CompareMadarTrace): string[] {
     const toolInputs = rawTraceToolInputs(turn)
     let sawInitialMadarCall = turn.turn > firstMadarTurn
     for (const [index, toolName] of turn.tools.entries()) {
-      if (!isMadarTraceToolName(toolName) && !isFocusedFollowUpTraceToolName(toolName)) {
+      const inputSummary = toolInputs[index] ?? ''
+      if (!isMadarTraceToolName(toolName) && !isFocusedFollowUpTraceToolUse(toolName, inputSummary)) {
         continue
       }
       if (!sawInitialMadarCall) {
@@ -1652,7 +1653,7 @@ function traceFocusedFollowUpInputs(trace: CompareMadarTrace): string[] {
         }
         continue
       }
-      const input = normalizeAnswerQualityText(toolInputs[index] ?? '')
+      const input = normalizeAnswerQualityText(inputSummary)
       if (input.length > 0) {
         followUpInputs.push(input)
       }

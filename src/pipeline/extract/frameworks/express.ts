@@ -66,6 +66,7 @@ interface MountRecord {
 
 interface ExpressModuleAnalysis {
   sourceText: string
+  stem: string
   exportedBindings: Map<string, ImportedBindingTarget>
   routeRecords: RouteRecord[]
 }
@@ -547,13 +548,15 @@ function resolveLocalRouteAttachment(
 
 function analyzeExpressModule(filePath: string): ExpressModuleAnalysis {
   const sourceText = existsSync(filePath) && statSync(filePath).isFile() ? readFileSync(filePath, 'utf8') : ''
+  const stem = moduleStem(filePath)
   const cached = expressModuleAnalysisCache.get(filePath)
-  if (cached && cached.sourceText === sourceText) {
+  if (cached && cached.sourceText === sourceText && cached.stem === stem) {
     return cached
   }
 
   const analysis: ExpressModuleAnalysis = {
     sourceText,
+    stem,
     exportedBindings: new Map<string, ImportedBindingTarget>(),
     routeRecords: [],
   }

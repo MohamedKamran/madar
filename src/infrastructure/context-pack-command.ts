@@ -820,12 +820,6 @@ function preserveFinalRuntimeEntrypointContextPreview(
     return
   }
 
-  const keptKeys = new Set(
-    matchedNodes.flatMap((node) => {
-      const key = runtimePrimaryPathRecordKey(asJsonRecord(node))
-      return key ? [key] : []
-    }),
-  )
   const existingPreviewKeys = new Set(
     asUnknownArray(payload.expandable).flatMap((entry) => {
       const record = asJsonRecord(entry)
@@ -841,7 +835,7 @@ function preserveFinalRuntimeEntrypointContextPreview(
     .filter((record): record is JsonRecord => record !== null)
     .flatMap((record): JsonRecord[] => {
       const key = runtimePrimaryPathRecordKey(record)
-      if (!key || keptKeys.has(key) || existingPreviewKeys.has(key)) {
+      if (!key || existingPreviewKeys.has(key)) {
         return []
       }
       if (record.source_file !== entrySourceFile || record.label === entryLabel) {

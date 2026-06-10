@@ -64,6 +64,33 @@ describe('extract duplicate file stems', () => {
     }
   })
 
+  it('keeps stems distinct when id normalization collapses separators', () => {
+    const sandbox = createSandbox()
+    try {
+      const files = [
+        writeFile(sandbox, 'apps/web/foo-bar.ts', 'export function fooDash() { return 1 }\n'),
+        writeFile(sandbox, 'apps/web/foo_bar.ts', 'export function fooUnderscore() { return 2 }\n'),
+      ].map((filePath) => resolve(filePath))
+
+      const graph = buildFromJson(extract(files), { directed: true })
+      const nodes = [...graph.nodeEntries()].map(([id, attrs]) => ({
+        id,
+        label: String(attrs.label ?? ''),
+        source_file: String(attrs.source_file ?? ''),
+      }))
+
+      const fileNodes = nodes.filter((node) => node.label === 'foo-bar.ts' || node.label === 'foo_bar.ts')
+      expect(fileNodes).toHaveLength(2)
+      expect(new Set(fileNodes.map((node) => node.id)).size).toBe(2)
+      expect(fileNodes.map((node) => relativeSource(sandbox, node.source_file)).sort()).toEqual([
+        'apps/web/foo-bar.ts',
+        'apps/web/foo_bar.ts',
+      ])
+    } finally {
+      rmSync(sandbox, { recursive: true, force: true })
+    }
+  })
+
   it('keeps duplicate controller.ts and route.ts imports bound to the correct file-local symbols', () => {
     const sandbox = createSandbox()
     try {

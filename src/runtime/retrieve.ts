@@ -3605,6 +3605,7 @@ function recoverMissingRuntimeProofBranches(
   runtimeProofProfile: RuntimeProofProfile | undefined,
   existingSideEffects: readonly ContextPackExecutionSliceBranch[],
   existingTerminalBoundaries: readonly ContextPackExecutionSliceBranch[],
+  rootPath?: string,
 ): {
   sideEffects: ContextPackExecutionSliceBranch[]
   terminalBoundaries: ContextPackExecutionSliceBranch[]
@@ -3641,6 +3642,7 @@ function recoverMissingRuntimeProofBranches(
   const currentSteps = primaryPath.nodeIds
     .map((nodeId) => nodeById.get(nodeId))
     .filter((step): step is ContextPackExecutionSliceStep => step !== undefined)
+  const primaryBoundaries = primaryPathBoundaries(primaryPath, nodeById)
 
   const recoveryBranchesFor = (
     sideEffects: readonly ContextPackExecutionSliceBranch[],
@@ -3685,7 +3687,7 @@ function recoverMissingRuntimeProofBranches(
     ]
     const currentPhaseCoverage = phaseCoverageForPath(
       currentSteps,
-      [],
+      primaryBoundaries,
       question,
       currentSteps,
       currentTracedSteps,
@@ -3707,7 +3709,7 @@ function recoverMissingRuntimeProofBranches(
     const rankedCandidates = candidateSeedIds
       .filter((nodeId, index, values) => !visibleNodeIds.has(nodeId) && values.indexOf(nodeId) === index)
       .map((nodeId) => {
-        const step = nodeById.get(nodeId) ?? (graph.hasNode(nodeId) ? executionSliceStepFromGraph(graph, nodeId) : undefined)
+        const step = nodeById.get(nodeId) ?? (graph.hasNode(nodeId) ? executionSliceStepFromGraph(graph, nodeId, rootPath) : undefined)
         if (!step) {
           return undefined
         }
@@ -3732,7 +3734,7 @@ function recoverMissingRuntimeProofBranches(
         const bestPath = recoveryPathCandidates
           .map((path) => {
             const branchSteps = path.nodeIds
-              .map((branchNodeId) => nodeById.get(branchNodeId) ?? executionSliceStepFromGraph(graph, branchNodeId))
+              .map((branchNodeId) => nodeById.get(branchNodeId) ?? executionSliceStepFromGraph(graph, branchNodeId, rootPath))
               .filter((branchStep): branchStep is ContextPackExecutionSliceStep => branchStep !== undefined)
               .slice(0, 3)
             if (branchSteps.length === 0) {
@@ -3761,7 +3763,7 @@ function recoverMissingRuntimeProofBranches(
               : 0
             const combinedPhaseCoverage = phaseCoverageForPath(
               currentSteps,
-              [],
+              primaryBoundaries,
               question,
               currentSteps,
               [...currentTracedSteps, ...branchSteps],
@@ -3879,7 +3881,7 @@ function recoverMissingRuntimeProofBranches(
     )
     const currentPhaseCoverage = phaseCoverageForPath(
       currentSteps,
-      [],
+      primaryBoundaries,
       question,
       currentSteps,
       currentTracedSteps,
@@ -3900,7 +3902,7 @@ function recoverMissingRuntimeProofBranches(
     const rankedCandidates = candidateSeedIds
       .filter((nodeId, index, values) => !visibleNodeIds.has(nodeId) && values.indexOf(nodeId) === index)
       .map((nodeId) => {
-        const step = nodeById.get(nodeId) ?? (graph.hasNode(nodeId) ? executionSliceStepFromGraph(graph, nodeId) : undefined)
+        const step = nodeById.get(nodeId) ?? (graph.hasNode(nodeId) ? executionSliceStepFromGraph(graph, nodeId, rootPath) : undefined)
         if (!step) {
           return undefined
         }
@@ -3915,7 +3917,7 @@ function recoverMissingRuntimeProofBranches(
         const bestPath = (candidatePaths.length > 0 ? candidatePaths : [fallbackPath])
           .map((path) => {
             const branchSteps = path.nodeIds
-              .map((branchNodeId) => nodeById.get(branchNodeId) ?? executionSliceStepFromGraph(graph, branchNodeId))
+              .map((branchNodeId) => nodeById.get(branchNodeId) ?? executionSliceStepFromGraph(graph, branchNodeId, rootPath))
               .filter((branchStep): branchStep is ContextPackExecutionSliceStep => branchStep !== undefined)
               .slice(0, 3)
             if (branchSteps.length === 0) {
@@ -3940,7 +3942,7 @@ function recoverMissingRuntimeProofBranches(
               .length
             const combinedPhaseCoverage = phaseCoverageForPath(
               currentSteps,
-              [],
+              primaryBoundaries,
               question,
               currentSteps,
               [...currentTracedSteps, ...branchSteps],
@@ -4019,7 +4021,7 @@ function recoverMissingRuntimeProofBranches(
     const nextBranches = recoveryBranchesFor(existingSideEffects, existingTerminalBoundaries)
     const nextPhaseCoverage = phaseCoverageForPath(
       currentSteps,
-      [],
+      primaryBoundaries,
       question,
       currentSteps,
       [
@@ -4866,6 +4868,7 @@ function buildExecutionSlice(
     runtimeProofProfile,
     branches.sideEffects,
     branches.terminalBoundaries,
+    rootPath,
   )
   logExecutionSliceDebug('branches', {
     ms: Date.now() - branchStart,
