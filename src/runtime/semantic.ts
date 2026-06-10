@@ -113,7 +113,8 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
 }
 
 async function loadPipeline(task: string, model: string, projectRoot?: string): Promise<TransformerPipeline> {
-  const cacheKey = `${task}\u0000${model}`
+  const resolvedRoot = resolve(projectRoot ?? process.cwd())
+  const cacheKey = `${task}\u0000${model}\u0000${resolvedRoot}`
   const cached = pipelineCache.get(cacheKey)
   if (cached) {
     return cached
@@ -121,7 +122,7 @@ async function loadPipeline(task: string, model: string, projectRoot?: string): 
 
   const pending = withLoadTimeout((async () => {
     try {
-      const transformersModule = await importTransformersModule(projectRoot ?? process.cwd())
+      const transformersModule = await importTransformersModule(resolvedRoot)
       return await transformersModule.pipeline(task, model)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
